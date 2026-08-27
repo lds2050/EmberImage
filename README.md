@@ -57,7 +57,10 @@ npm run check
 项目通过 GitHub Actions 分别构建：
 
 - Windows x64：NSIS `.exe` 安装程序；
-- macOS Intel + Apple Silicon：通用版 `.dmg`。
+- macOS Apple Silicon：arm64 `.dmg`；
+- macOS Intel：x64 `.dmg`。
+
+三个安装包均使用最高压缩，并仅保留中文与英文运行时资源；macOS 分架构发布避免了通用包携带两套 Chromium 的额外体积。
 
 安装包会附加在 GitHub 仓库的 Releases 页面。当前安装包未购买商业代码签名证书，因此 macOS Gatekeeper 或 Windows SmartScreen 可能在首次运行时显示安全提示。
 

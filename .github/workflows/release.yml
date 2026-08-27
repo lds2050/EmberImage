@@ -21,11 +21,16 @@ jobs:
             script: dist:win
             artifact: emberimage-windows
             path: release/*.exe
-          - name: macOS
+          - name: macOS Apple Silicon
             os: macos-latest
-            script: dist:mac
-            artifact: emberimage-macos
-            path: release/*.dmg
+            script: dist:mac:arm64
+            artifact: emberimage-macos-arm64
+            path: release/*-mac-arm64.dmg
+          - name: macOS Intel
+            os: macos-latest
+            script: dist:mac:x64
+            artifact: emberimage-macos-x64
+            path: release/*-mac-x64.dmg
 
     runs-on: ${{ matrix.os }}
 

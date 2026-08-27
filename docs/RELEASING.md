@@ -31,8 +31,11 @@ git push origin v0.3.0
 推送 `v0.3.0` 标签后，`.github/workflows/release.yml` 会自动执行：
 
 1. 在 Windows 构建 `EmberImage-0.3.0-win-x64.exe`；
-2. 在 macOS 构建 `EmberImage-0.3.0-mac-universal.dmg`；
-3. 两个任务和测试都成功后创建 GitHub Release，并附上两个安装包。
+2. 在 macOS 构建 Apple Silicon 版 `EmberImage-0.3.0-mac-arm64.dmg`；
+3. 在 macOS 构建 Intel 版 `EmberImage-0.3.0-mac-x64.dmg`；
+4. 三个任务和测试都成功后创建 GitHub Release，并附上三个安装包。
+
+所有安装包使用最高压缩，并只保留中文与英文 Electron 语言资源。macOS 分架构发布可以避免通用包同时携带两套 Chromium，用户只需下载与自己电脑芯片匹配的文件。
 
 ## 后续发布新版本
 

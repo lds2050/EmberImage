@@ -15,7 +15,9 @@
     "start": "electron .",
     "test": "node --test",
     "check": "node --check src/main/main.cjs && node --check src/main/preload.cjs && node --check src/main/secure-store.cjs && node --check src/main/storage.cjs && node --check src/renderer/app.js && node --check src/shared/validation.js",
-    "dist:mac": "electron-builder --mac dmg --universal",
+    "dist:mac": "electron-builder --mac dmg",
+    "dist:mac:arm64": "electron-builder --mac dmg --arm64",
+    "dist:mac:x64": "electron-builder --mac dmg --x64",
     "dist:win": "electron-builder --win nsis --x64"
   },
   "devDependencies": {
@@ -27,7 +29,11 @@
     "productName": "EmberImage",
     "copyright": "Copyright © 2026 lds2050",
     "asar": true,
-    "compression": "normal",
+    "compression": "maximum",
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ],
     "directories": {
       "output": "release"
     },
