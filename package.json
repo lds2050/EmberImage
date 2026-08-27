@@ -1,0 +1,88 @@
+{
+  "name": "gpt-image-studio",
+  "version": "0.3.0",
+  "productName": "EmberImage",
+  "description": "A local-first image generation desktop client for OpenAI-compatible APIs.",
+  "author": "lds2050",
+  "homepage": "https://github.com/lds2050/EmberImage",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lds2050/EmberImage.git"
+  },
+  "main": "src/main/main.cjs",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "check": "node --check src/main/main.cjs && node --check src/main/preload.cjs && node --check src/main/secure-store.cjs && node --check src/main/storage.cjs && node --check src/renderer/app.js && node --check src/shared/validation.js",
+    "dist:mac": "electron-builder --mac dmg --universal",
+    "dist:win": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.lds2050.emberimage",
+    "productName": "EmberImage",
+    "copyright": "Copyright © 2026 lds2050",
+    "asar": true,
+    "compression": "normal",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.graphics-design",
+      "icon": "src/assets/emberimage-icon.svg",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "iconSize": 96,
+      "window": {
+        "width": 560,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 170,
+          "y": 190,
+          "type": "file"
+        },
+        {
+          "x": 390,
+          "y": 190,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "win": {
+      "icon": "src/assets/emberimage-icon.svg",
+      "artifactName": "${productName}-${version}-win-${arch}.${ext}",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "EmberImage"
+    }
+  }
+}

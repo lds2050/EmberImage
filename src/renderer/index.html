@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' file: data:; style-src 'self'; script-src 'self'; connect-src 'none';"
+    />
+    <title>EmberImage</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <img class="brand-mark" src="../assets/emberimage-icon.svg" alt="" />
+          <div>
+            <p class="brand-name">EmberImage</p>
+          </div>
+        </div>
+
+        <nav class="primary-nav" aria-label="主导航">
+          <button class="nav-item active" type="button" data-view-target="generate">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4" /></svg>
+            <span>开始</span>
+          </button>
+          <button class="nav-item" type="button" data-view-target="history">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5" /></svg>
+            <span>画廊</span>
+            <span class="nav-count" id="history-count">0</span>
+          </button>
+          <button class="nav-item" type="button" data-view-target="settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1A7 7 0 0 0 14.8 6L14.5 3h-5L9.2 6a7 7 0 0 0-1.7 1.1l-2.4-1-2 3.4L5.1 11a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1A7 7 0 0 0 9.2 18l.3 3h5l.3-3a7 7 0 0 0 1.7-1.1l2.4 1 2-3.4-2-1.5a7 7 0 0 0 .1-1Z" /></svg>
+            <span>设置</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-spacer"></div>
+
+        <div class="connection-mini-card" id="sidebar-connection-card">
+          <div class="connection-dot" id="connection-dot"></div>
+          <div class="connection-copy">
+            <strong id="connection-label">尚未连接</strong>
+            <span id="connection-host">请配置 API</span>
+          </div>
+          <button class="icon-button" id="open-settings-button" type="button" aria-label="打开连接设置">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+          </button>
+        </div>
+
+        <p class="version-label" id="version-label">V0.3.0</p>
+      </aside>
+
+      <main class="main-area">
+        <section class="view active" id="view-generate" data-view="generate">
+          <div class="studio-grid">
+            <div class="composer-column">
+              <section class="panel prompt-panel">
+                <div class="panel-heading compact">
+                  <div>
+                    <span class="section-number">01</span>
+                    <h2>描述画面</h2>
+                  </div>
+                  <span class="character-count"><span id="prompt-count">0</span> / 32,000</span>
+                </div>
+                <div class="prompt-wrap" id="prompt-wrap">
+                  <textarea
+                    id="prompt-input"
+                    maxlength="32000"
+                    placeholder="例如：薄雾清晨，一座漂浮在云海上的东方未来城市，远景构图，电影感光线，精致细节……"
+                    aria-label="画面描述"
+                  ></textarea>
+                  <div class="prompt-actions">
+                    <button class="text-button" id="restore-prompt" type="button">恢复上次</button>
+                    <button class="text-button" id="clear-prompt" type="button">清空</button>
+                  </div>
+                </div>
+                <p class="field-error" id="prompt-error"></p>
+                <div class="style-row" aria-label="风格模板">
+                  <span class="style-label">风格灵感</span>
+                  <button class="style-chip" type="button" data-style="电影感摄影，真实光影，细腻质感">电影摄影</button>
+                  <button class="style-chip" type="button" data-style="现代商业产品摄影，干净布光，专业棚拍">商业产品</button>
+                  <button class="style-chip" type="button" data-style="细腻数字插画，富有表现力的色彩与构图">数字插画</button>
+                  <button class="style-chip" type="button" data-style="复古胶片摄影，柔和颗粒，低饱和色调">复古胶片</button>
+                </div>
+              </section>
+
+              <section class="panel parameter-panel">
+                <div class="panel-heading">
+                  <div>
+                    <span class="section-number">02</span>
+                    <h2>生成参数</h2>
+                  </div>
+                  <button class="ghost-button" id="reset-parameters" type="button">恢复默认</button>
+                </div>
+
+                <div class="parameter-group">
+                  <div class="parameter-title-row">
+                    <label>画布尺寸</label>
+                    <span class="parameter-hint" id="size-hint">1:1 · 1.0 MP</span>
+                  </div>
+                  <div class="size-options" id="size-options">
+                    <button class="size-option active" type="button" data-size="1024x1024">
+                      <span class="ratio-icon ratio-square"></span>
+                      <strong>方形</strong><small>1024 × 1024</small>
+                    </button>
+                    <button class="size-option" type="button" data-size="1536x1024">
+                      <span class="ratio-icon ratio-landscape"></span>
+                      <strong>横图</strong><small>1536 × 1024</small>
+                    </button>
+                    <button class="size-option" type="button" data-size="1024x1536">
+                      <span class="ratio-icon ratio-portrait"></span>
+                      <strong>竖图</strong><small>1024 × 1536</small>
+                    </button>
+                    <button class="size-option" type="button" data-size="1536x864">
+                      <span class="ratio-icon ratio-wide"></span>
+                      <strong>16:9</strong><small>1536 × 864</small>
+                    </button>
+                    <button class="size-option" type="button" data-size="custom">
+                      <span class="ratio-icon ratio-custom">+</span>
+                      <strong>自定义</strong><small>16 的倍数</small>
+                    </button>
+                  </div>
+                  <div class="custom-size-row hidden" id="custom-size-row">
+                    <label>宽度<input id="custom-width" type="number" min="16" max="3840" step="16" value="1024" /></label>
+                    <span>×</span>
+                    <label>高度<input id="custom-height" type="number" min="16" max="3840" step="16" value="1024" /></label>
+                  </div>
+                  <p class="field-error" id="size-error"></p>
+                </div>
+
+                <div class="parameter-grid">
+                  <div class="parameter-group">
+                    <div class="parameter-title-row">
+                      <label>生成质量</label>
+                      <span class="parameter-hint">影响耗时与费用</span>
+                    </div>
+                    <div class="segmented-control" id="quality-control">
+                      <button type="button" data-value="auto" class="active">自动</button>
+                      <button type="button" data-value="low">低</button>
+                      <button type="button" data-value="medium">中</button>
+                      <button type="button" data-value="high">高</button>
+                    </div>
+                  </div>
+
+                  <div class="parameter-group">
+                    <div class="parameter-title-row">
+                      <label for="count-input">生成数量</label>
+                      <span class="parameter-hint">1–10 张</span>
+                    </div>
+                    <div class="stepper">
+                      <button type="button" id="count-decrease" aria-label="减少数量">−</button>
+                      <input id="count-input" type="number" min="1" max="10" step="1" value="1" />
+                      <button type="button" id="count-increase" aria-label="增加数量">+</button>
+                      <span>张图片</span>
+                    </div>
+                    <p class="field-error" id="count-error"></p>
+                  </div>
+                </div>
+
+                <div class="parameter-grid">
+                  <div class="parameter-group">
+                    <div class="parameter-title-row"><label>背景</label></div>
+                    <div class="segmented-control" id="background-control">
+                      <button type="button" data-value="auto" class="active">自动</button>
+                      <button type="button" data-value="opaque">不透明</button>
+                      <button type="button" data-value="transparent">透明</button>
+                    </div>
+                  </div>
+
+                  <div class="parameter-group">
+                    <div class="parameter-title-row"><label>输出格式</label></div>
+                    <div class="segmented-control" id="format-control">
+                      <button type="button" data-value="png" class="active">PNG</button>
+                      <button type="button" data-value="jpeg">JPEG</button>
+                      <button type="button" data-value="webp">WebP</button>
+                    </div>
+                    <p class="field-error" id="format-error"></p>
+                  </div>
+                </div>
+
+                <details class="advanced-settings">
+                  <summary>
+                    <span>高级设置</span>
+                    <span class="summary-caption">压缩率与内容过滤</span>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+                  </summary>
+                  <div class="advanced-content">
+                    <div class="parameter-group hidden" id="compression-group">
+                      <div class="parameter-title-row">
+                        <label for="compression-range">输出压缩率</label>
+                        <strong id="compression-value">90%</strong>
+                      </div>
+                      <input id="compression-range" class="range-input" type="range" min="0" max="100" value="90" />
+                      <p class="parameter-note">仅 JPEG 和 WebP 生效；数值越高，画质越好、文件越大。</p>
+                    </div>
+                    <div class="parameter-group">
+                      <div class="parameter-title-row">
+                        <label>内容过滤</label>
+                        <span class="parameter-hint">建议保持自动</span>
+                      </div>
+                      <div class="segmented-control short" id="moderation-control">
+                        <button type="button" data-value="auto" class="active">自动</button>
+                        <button type="button" data-value="low">较宽松</button>
+                      </div>
+                    </div>
+                  </div>
+                </details>
+              </section>
+
+              <div class="generation-footer">
+                <div class="generation-guidance">
+                  <p id="validation-summary">填写画面描述后即可开始生成</p>
+                  <span id="parameter-summary">1024×1024 · 自动质量 · PNG</span>
+                </div>
+                <button class="primary-button" id="generate-button" type="button" disabled>
+                  <span>开始生成</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14 0M14 7l5 5-5 5" /></svg>
+                </button>
+              </div>
+            </div>
+
+            <aside class="result-column">
+              <div class="result-header">
+                <div>
+                  <span class="section-number">03</span>
+                  <h2>生成结果</h2>
+                </div>
+                <div class="result-header-actions hidden" id="result-header-actions">
+                  <span id="result-meta"></span>
+                  <button class="ghost-button" id="download-all-button" type="button">全部下载</button>
+                </div>
+              </div>
+
+              <div class="result-stage empty" id="result-stage">
+                <div class="empty-result" id="empty-result">
+                  <div class="empty-visual">
+                    <div class="empty-frame frame-one"></div>
+                    <div class="empty-frame frame-two"></div>
+                    <div class="empty-spark">✦</div>
+                  </div>
+                  <h3>你的作品将在这里出现</h3>
+                  <p>写下画面描述并选择参数，点击生成后即可在此预览和下载。</p>
+                </div>
+
+                <div class="progress-result hidden" id="progress-result">
+                  <div class="progress-preview">
+                    <img class="partial-preview hidden" id="partial-preview" alt="流式生成预览" />
+                    <div class="shimmer"></div>
+                    <div class="progress-mark"><span></span><span></span><span></span></div>
+                  </div>
+                  <h3>正在构思你的画面</h3>
+                  <p>模型正在处理细节，请稍候… <strong id="elapsed-time">00:00</strong></p>
+                  <button class="ghost-button danger" id="cancel-button" type="button">取消生成</button>
+                </div>
+
+                <div class="error-result hidden" id="error-result">
+                  <div class="error-icon">!</div>
+                  <h3 id="error-title">生成没有完成</h3>
+                  <p id="error-message"></p>
+                  <div class="error-actions">
+                    <button class="secondary-button" id="retry-button" type="button">重新尝试</button>
+                    <button class="ghost-button" id="error-settings-button" type="button">检查连接</button>
+                  </div>
+                  <details class="error-details" id="error-details">
+                    <summary>技术详情</summary>
+                    <pre id="error-technical"></pre>
+                  </details>
+                </div>
+
+                <div class="results-grid hidden" id="results-grid"></div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="view" id="view-history" data-view="history">
+          <div class="history-toolbar">
+            <label class="search-field">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m16 16 5 5" /></svg>
+              <input id="history-search" type="search" placeholder="搜索提示词或模型" />
+            </label>
+            <div class="history-toolbar-actions">
+              <button class="filter-button" id="favorite-filter-button" type="button">☆ 只看收藏</button>
+              <span id="history-summary">共 0 次生成</span>
+              <button class="ghost-button danger" id="clear-history-button" type="button">清空记录</button>
+            </div>
+          </div>
+          <div class="history-grid" id="history-list"></div>
+          <div class="history-empty hidden" id="history-empty">
+            <div>◇</div>
+            <h3>还没有生成记录</h3>
+            <p>完成第一张作品后，它会出现在这里。</p>
+            <button class="secondary-button" type="button" data-view-target="generate">开始创作</button>
+          </div>
+        </section>
+
+        <section class="view" id="view-settings" data-view="settings">
+          <div class="settings-layout">
+            <aside class="connection-library">
+              <div class="connection-library-heading">
+                <div><strong>连接配置</strong><span>可保存多组服务</span></div>
+                <button class="add-connection-button" id="add-connection-button" type="button" aria-label="新建连接">+</button>
+              </div>
+              <div class="connection-profile-list" id="connection-profile-list"></div>
+              <button class="official-template-button" id="official-template-button" type="button">+ 新建 OpenAI 默认配置</button>
+            </aside>
+
+            <div class="settings-content-stack">
+              <section class="settings-card connection-editor-card">
+                <div class="settings-card-heading">
+                  <div class="settings-icon coral">↗</div>
+                  <div><h2 id="connection-editor-title">编辑连接</h2><p>所有服务统一使用 OpenAI 兼容的图片生成协议。</p></div>
+                  <div class="settings-heading-actions">
+                    <button class="request-log-trigger" id="open-request-logs-button" type="button">
+                      <span>≋</span> 请求日志 <strong id="request-log-count">0</strong>
+                    </button>
+                    <button class="ghost-button danger connection-delete-button" id="delete-connection-button" type="button">删除配置</button>
+                  </div>
+                </div>
+
+                <div class="form-grid">
+                  <div class="form-field">
+                    <label for="connection-name-input">连接名称</label>
+                    <input id="connection-name-input" type="text" value="OpenAI" spellcheck="false" />
+                    <p class="field-error" id="connection-name-error"></p>
+                  </div>
+                  <div class="form-field">
+                    <label for="model-input">模型名称</label>
+                    <input id="model-input" type="text" value="gpt-image-2" spellcheck="false" />
+                    <p class="field-error" id="model-error"></p>
+                  </div>
+                  <div class="form-field full">
+                    <label for="base-url-input">API Base URL</label>
+                    <input id="base-url-input" type="url" value="https://api.openai.com/v1" spellcheck="false" />
+                    <p class="field-help">OpenAI 官方填写 https://api.openai.com/v1；其他服务填写其兼容地址。切换配置不会改写这里的内容。</p>
+                    <p class="field-error" id="base-url-error"></p>
+                  </div>
+                  <div class="form-field full">
+                    <label for="api-key-input">API Key</label>
+                    <div class="password-field">
+                      <input id="api-key-input" type="password" placeholder="输入新的 API Key" autocomplete="off" spellcheck="false" />
+                      <button id="toggle-key-visibility" type="button" aria-label="显示或隐藏密钥">显示</button>
+                    </div>
+                    <p class="field-help" id="api-key-help">密钥默认只在本次应用运行期间保留。</p>
+                    <p class="field-error" id="api-key-error"></p>
+                  </div>
+                  <div class="form-field full inline-key-storage">
+                    <div class="inline-section-heading">
+                      <div>
+                        <label>密钥保存方式</label>
+                        <p>每份连接独立保存，本版本不使用系统钥匙串。</p>
+                      </div>
+                      <span class="inline-section-icon">⌁</span>
+                    </div>
+                    <div class="storage-options" id="storage-options">
+                      <button class="storage-option active" type="button" data-value="session">
+                        <span class="storage-check">✓</span>
+                        <span><strong>仅本次会话</strong><small>关闭应用后密钥从内存清除。</small></span>
+                      </button>
+                      <button class="storage-option" type="button" data-value="encrypted">
+                        <span class="storage-check">✓</span>
+                        <span><strong>本机加密保存</strong><small>AES-256-GCM 加密，重新打开后自动解密。</small></span>
+                      </button>
+                    </div>
+                    <div class="unlock-area hidden" id="unlock-area">
+                      <div><strong>旧版密钥需要迁移一次</strong><p>输入旧本地密码后会转为本机自动解密，以后打开即可使用。</p></div>
+                      <div class="unlock-form">
+                        <input id="unlock-password-input" type="password" placeholder="旧版本地加密密码" />
+                        <button class="secondary-button" id="unlock-button" type="button">解锁并迁移</button>
+                      </div>
+                      <p class="field-error" id="unlock-error"></p>
+                    </div>
+                    <p class="local-encryption-note">加密设备密钥保存在当前用户的应用数据目录，仅用于避免 API Key 明文落盘，不能防御已取得本机账户权限的攻击者。</p>
+                  </div>
+                  <div class="form-field">
+                    <label for="request-timeout-input">请求总超时</label>
+                    <div class="input-with-suffix"><input id="request-timeout-input" type="number" min="30" max="900" step="10" value="180" /><span>秒</span></div>
+                    <p class="field-help">可设置 30–900 秒；超时后客户端停止等待。</p>
+                    <p class="field-error" id="request-timeout-error"></p>
+                  </div>
+                  <div class="form-field">
+                    <label>流式请求</label>
+                    <button class="switch-row" id="stream-toggle" type="button" aria-pressed="false">
+                      <span><strong>生成过程预览</strong><small>默认关闭；兼容服务可能不支持</small></span>
+                      <span class="switch-control"></span>
+                    </button>
+                  </div>
+                </div>
+
+                <aside class="settings-inline-note">
+                  <div class="note-icon">i</div>
+                  <div><strong>关于流式请求</strong><p>它可以更早返回部分图、改善等待反馈，也可能降低部分代理的空闲连接超时风险；但不会缩短模型生成时间，也不能保证避免服务端超时，因此默认关闭。</p></div>
+                </aside>
+
+                <div class="settings-actions">
+                  <button class="secondary-button" id="test-connection-button" type="button">测试连接</button>
+                  <button class="primary-button compact" id="save-connection-button" type="button">保存设置</button>
+                </div>
+                <div class="inline-status hidden" id="connection-test-status"></div>
+              </section>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="image-viewer hidden" id="image-viewer" role="dialog" aria-modal="true" aria-label="图片放大预览">
+      <button class="image-viewer-close" id="close-image-viewer-button" type="button" aria-label="关闭图片预览">×</button>
+      <img id="image-viewer-image" alt="放大预览" />
+      <p id="image-viewer-caption"></p>
+    </div>
+
+    <div class="drawer-backdrop hidden" id="request-log-overlay">
+      <aside class="request-log-drawer" role="dialog" aria-modal="true" aria-label="请求日志">
+        <div class="request-log-drawer-heading">
+          <div><h2>请求日志</h2><p>显示完整请求参数（API Key 除外）及失败响应体。</p></div>
+          <div>
+            <button class="ghost-button" id="refresh-logs-button" type="button">刷新</button>
+            <button class="ghost-button danger" id="clear-logs-button" type="button">清空</button>
+            <button class="drawer-close-button" id="close-request-logs-button" type="button" aria-label="关闭请求日志">×</button>
+          </div>
+        </div>
+        <div class="request-log-list" id="request-log-list"></div>
+        <div class="request-log-empty" id="request-log-empty">还没有请求日志</div>
+      </aside>
+    </div>
+
+    <div class="toast-region" id="toast-region" aria-live="polite"></div>
+
+    <script src="../shared/validation.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

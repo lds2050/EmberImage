@@ -1,0 +1,25 @@
+node_modules/
+dist/
+release/
+out/
+coverage/
+.DS_Store
+npm-debug.log*
+*.log
+
+# Local credentials and environment files must never enter Git.
+.env
+.env.*
+!.env.example
+.npmrc
+*.pem
+*.p12
+*.pfx
+*.key
+credentials.json
+secrets.json
+
+# Locally generated installers and update metadata.
+*.dmg
+*.exe
+*.blockmap
