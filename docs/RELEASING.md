@@ -21,37 +21,37 @@ git diff --cached
 git init -b main
 git add .
 git status
-git commit -m "Initial release: EmberImage v0.3.0"
+git commit -m "Release EmberImage v0.3.1"
 git remote add origin git@github.com:lds2050/EmberImage.git
 git push -u origin main
-git tag -a v0.3.0 -m "EmberImage v0.3.0"
-git push origin v0.3.0
+git tag -a v0.3.1 -m "EmberImage v0.3.1"
+git push origin v0.3.1
 ```
 
-推送 `v0.3.0` 标签后，`.github/workflows/release.yml` 会自动执行：
+推送 `v0.3.1` 标签后，`.github/workflows/release.yml` 会自动执行：
 
-1. 在 Windows 构建 `EmberImage-0.3.0-win-x64.exe`；
-2. 在 macOS 构建 Apple Silicon 版 `EmberImage-0.3.0-mac-arm64.dmg`；
-3. 在 macOS 构建 Intel 版 `EmberImage-0.3.0-mac-x64.dmg`；
+1. 在 Windows 构建 `EmberImage-0.3.1-win-x64.exe`；
+2. 在 macOS 构建 Apple Silicon 版 `EmberImage-0.3.1-mac-arm64.dmg`；
+3. 在 macOS 构建 Intel 版 `EmberImage-0.3.1-mac-x64.dmg`；
 4. 三个任务和测试都成功后创建 GitHub Release，并附上三个安装包。
 
 所有安装包使用最高压缩，并只保留中文与英文 Electron 语言资源。macOS 分架构发布可以避免通用包同时携带两套 Chromium，用户只需下载与自己电脑芯片匹配的文件。
 
 ## 后续发布新版本
 
-先修改 `package.json` 的版本号并提交，例如发布 0.3.1：
+先修改 `package.json` 的版本号并提交，例如发布 0.3.2：
 
 ```bash
 npm version patch
 git push origin main
-git push origin v0.3.1
+git push origin v0.3.2
 ```
 
 版本类型：
 
-- `npm version patch`：小修复，例如 0.3.0 → 0.3.1；
-- `npm version minor`：新增功能，例如 0.3.0 → 0.4.0；
-- `npm version major`：不兼容的大改动，例如 0.3.0 → 1.0.0。
+- `npm version patch`：小修复，例如 0.3.1 → 0.3.2；
+- `npm version minor`：新增功能，例如 0.3.1 → 0.4.0；
+- `npm version major`：不兼容的大改动，例如 0.3.1 → 1.0.0。
 
 ## 未签名安装包提示
 

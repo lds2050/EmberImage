@@ -63,8 +63,10 @@ test("creates and reuses a permission-restricted device encryption key", async (
     const second = await storage.getOrCreateDeviceKey();
     assert.equal(first.length, 32);
     assert.deepEqual(second, first);
-    const stat = await fs.stat(storage.deviceKeyPath);
-    assert.equal(stat.mode & 0o777, 0o600);
+    if (process.platform !== "win32") {
+      const stat = await fs.stat(storage.deviceKeyPath);
+      assert.equal(stat.mode & 0o777, 0o600);
+    }
   });
 });
 
