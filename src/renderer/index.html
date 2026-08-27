@@ -49,7 +49,7 @@
           </button>
         </div>
 
-        <p class="version-label" id="version-label">V0.3.1</p>
+        <p class="version-label" id="version-label">V0.3.2</p>
       </aside>
 
       <main class="main-area">
@@ -95,55 +95,38 @@
                   <button class="ghost-button" id="reset-parameters" type="button">恢复默认</button>
                 </div>
 
-                <div class="parameter-group">
-                  <div class="parameter-title-row">
-                    <label>画布尺寸</label>
-                    <span class="parameter-hint" id="size-hint">1:1 · 1.0 MP</span>
+                <div class="parameter-grid output-parameter-grid">
+                  <div class="parameter-group">
+                    <div class="parameter-title-row">
+                      <label>图像尺寸</label>
+                      <span class="parameter-hint">比例与分辨率独立设置</span>
+                    </div>
+                    <button class="size-setting-card" id="open-size-dialog-button" type="button">
+                      <span class="size-setting-icon"><span class="ratio-icon ratio-square"></span></span>
+                      <span class="size-setting-copy">
+                        <strong id="size-summary-value">1024 × 1024</strong>
+                        <small id="size-summary-meta">按比例 · 1K · 1:1</small>
+                      </span>
+                      <span class="size-setting-action">设置 <b>›</b></span>
+                    </button>
+                    <p class="field-error" id="size-error"></p>
                   </div>
-                  <div class="size-options" id="size-options">
-                    <button class="size-option active" type="button" data-size="1024x1024">
-                      <span class="ratio-icon ratio-square"></span>
-                      <strong>方形</strong><small>1024 × 1024</small>
-                    </button>
-                    <button class="size-option" type="button" data-size="1536x1024">
-                      <span class="ratio-icon ratio-landscape"></span>
-                      <strong>横图</strong><small>1536 × 1024</small>
-                    </button>
-                    <button class="size-option" type="button" data-size="1024x1536">
-                      <span class="ratio-icon ratio-portrait"></span>
-                      <strong>竖图</strong><small>1024 × 1536</small>
-                    </button>
-                    <button class="size-option" type="button" data-size="1536x864">
-                      <span class="ratio-icon ratio-wide"></span>
-                      <strong>16:9</strong><small>1536 × 864</small>
-                    </button>
-                    <button class="size-option" type="button" data-size="custom">
-                      <span class="ratio-icon ratio-custom">+</span>
-                      <strong>自定义</strong><small>16 的倍数</small>
-                    </button>
-                  </div>
-                  <div class="custom-size-row hidden" id="custom-size-row">
-                    <label>宽度<input id="custom-width" type="number" min="16" max="3840" step="16" value="1024" /></label>
-                    <span>×</span>
-                    <label>高度<input id="custom-height" type="number" min="16" max="3840" step="16" value="1024" /></label>
-                  </div>
-                  <p class="field-error" id="size-error"></p>
-                </div>
 
-                <div class="parameter-grid">
                   <div class="parameter-group">
                     <div class="parameter-title-row">
                       <label>生成质量</label>
-                      <span class="parameter-hint">影响耗时与费用</span>
+                      <span class="parameter-hint">不改变图片尺寸</span>
                     </div>
-                    <div class="segmented-control" id="quality-control">
-                      <button type="button" data-value="auto" class="active">自动</button>
-                      <button type="button" data-value="low">低</button>
-                      <button type="button" data-value="medium">中</button>
-                      <button type="button" data-value="high">高</button>
+                    <div class="option-card-control" id="quality-control">
+                      <button type="button" data-value="auto" class="active"><strong>自动</strong><small>模型决定</small></button>
+                      <button type="button" data-value="low"><strong>低</strong><small>快速草稿</small></button>
+                      <button type="button" data-value="medium"><strong>中</strong><small>质量均衡</small></button>
+                      <button type="button" data-value="high"><strong>高</strong><small>细节优先</small></button>
                     </div>
                   </div>
+                </div>
 
+                <div class="parameter-grid compact-parameter-grid">
                   <div class="parameter-group">
                     <div class="parameter-title-row">
                       <label for="count-input">生成数量</label>
@@ -157,9 +140,6 @@
                     </div>
                     <p class="field-error" id="count-error"></p>
                   </div>
-                </div>
-
-                <div class="parameter-grid">
                   <div class="parameter-group">
                     <div class="parameter-title-row"><label>背景</label></div>
                     <div class="segmented-control" id="background-control">
@@ -168,7 +148,6 @@
                       <button type="button" data-value="transparent">透明</button>
                     </div>
                   </div>
-
                   <div class="parameter-group">
                     <div class="parameter-title-row"><label>输出格式</label></div>
                     <div class="segmented-control" id="format-control">
@@ -410,6 +389,70 @@
       <button class="image-viewer-close" id="close-image-viewer-button" type="button" aria-label="关闭图片预览">×</button>
       <img id="image-viewer-image" alt="放大预览" />
       <p id="image-viewer-caption"></p>
+    </div>
+
+    <div class="size-dialog-backdrop hidden" id="size-dialog-overlay">
+      <section class="size-dialog" role="dialog" aria-modal="true" aria-labelledby="size-dialog-title">
+        <div class="size-dialog-heading">
+          <div>
+            <h2 id="size-dialog-title">设置图像尺寸</h2>
+            <p>当前：<span id="size-dialog-current">1024 × 1024</span></p>
+          </div>
+          <button class="dialog-close-button" id="close-size-dialog-button" type="button" aria-label="关闭图像尺寸设置">×</button>
+        </div>
+
+        <div class="segmented-control size-mode-control" id="size-mode-control">
+          <button type="button" data-value="auto">自动</button>
+          <button type="button" data-value="ratio" class="active">按比例</button>
+          <button type="button" data-value="custom">自定义宽高</button>
+        </div>
+
+        <div class="size-ratio-panel" id="size-ratio-panel">
+          <div class="size-dialog-section">
+            <label>基准分辨率</label>
+            <div class="segmented-control resolution-tier-control" id="resolution-control">
+              <button type="button" data-value="1k" class="active">1K</button>
+              <button type="button" data-value="2k">2K</button>
+              <button type="button" data-value="4k">4K <small>实验</small></button>
+            </div>
+          </div>
+
+          <div class="size-dialog-section">
+            <label>图像比例</label>
+            <div class="ratio-options" id="ratio-control">
+              <button class="ratio-option active" type="button" data-ratio="1:1"><span class="ratio-icon ratio-square"></span><strong>1:1</strong></button>
+              <button class="ratio-option" type="button" data-ratio="3:2"><span class="ratio-icon ratio-landscape"></span><strong>3:2</strong></button>
+              <button class="ratio-option" type="button" data-ratio="2:3"><span class="ratio-icon ratio-portrait"></span><strong>2:3</strong></button>
+              <button class="ratio-option" type="button" data-ratio="16:9"><span class="ratio-icon ratio-wide"></span><strong>16:9</strong></button>
+              <button class="ratio-option" type="button" data-ratio="9:16"><span class="ratio-icon ratio-tall"></span><strong>9:16</strong></button>
+              <button class="ratio-option" type="button" data-ratio="4:3"><span class="ratio-icon ratio-four-three"></span><strong>4:3</strong></button>
+              <button class="ratio-option" type="button" data-ratio="3:4"><span class="ratio-icon ratio-three-four"></span><strong>3:4</strong></button>
+              <button class="ratio-option" type="button" data-ratio="21:9"><span class="ratio-icon ratio-ultrawide"></span><strong>21:9</strong></button>
+            </div>
+          </div>
+        </div>
+
+        <div class="size-custom-panel hidden" id="size-custom-panel">
+          <div class="custom-size-row">
+            <label>宽度<input id="custom-width" type="number" min="16" max="3840" step="16" value="1024" /></label>
+            <span>×</span>
+            <label>高度<input id="custom-height" type="number" min="16" max="3840" step="16" value="1024" /></label>
+          </div>
+          <p>宽高必须是 16 的倍数，宽高比需在 1:3 至 3:1 之间。</p>
+        </div>
+
+        <div class="size-dialog-preview">
+          <span>将使用</span>
+          <strong id="size-dialog-preview-value">1024 × 1024</strong>
+          <small id="size-dialog-preview-note">1.0 MP</small>
+        </div>
+        <p class="field-error size-dialog-error" id="size-dialog-error"></p>
+
+        <div class="size-dialog-actions">
+          <button class="secondary-button" id="cancel-size-dialog-button" type="button">取消</button>
+          <button class="primary-button compact" id="confirm-size-dialog-button" type="button">确定</button>
+        </div>
+      </section>
     </div>
 
     <div class="drawer-backdrop hidden" id="request-log-overlay">

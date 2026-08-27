@@ -1,6 +1,6 @@
 {
   "name": "gpt-image-studio",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "productName": "EmberImage",
   "description": "A local-first image generation desktop client for OpenAI-compatible APIs.",
   "author": "lds2050",

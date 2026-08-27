@@ -42,6 +42,22 @@ test("validates flexible GPT Image 2 dimensions", () => {
   assert.match(V.parseSize("3840x1024").error, /宽高比/);
   assert.match(V.parseSize("3840x2160").experimental ? "experimental" : "", /experimental/);
   assert.match(V.parseSize("3840x3840").error, /最大分辨率/);
+  assert.match(V.parseSize("256x256").error, /总像素/);
+});
+
+test("keeps aspect ratio and resolution presets independent", () => {
+  assert.equal(V.resolvePresetSize("1:1", "1k"), "1024x1024");
+  assert.equal(V.resolvePresetSize("16:9", "2k"), "2048x1152");
+  assert.equal(V.resolvePresetSize("16:9", "4k"), "3840x2160");
+  assert.equal(V.resolvePresetSize("1:1", "4k"), "2880x2880");
+  assert.deepEqual(V.findSizePreset("1152x2048"), { ratio: "9:16", resolution: "2k" });
+  assert.deepEqual(V.findSizePreset("1536x2048"), { ratio: "3:4", resolution: "2k" });
+
+  for (const sizes of Object.values(V.SIZE_PRESETS)) {
+    for (const size of Object.values(sizes)) {
+      assert.equal(V.parseSize(size).error, undefined, `${size} should be valid`);
+    }
+  }
 });
 
 test("rejects transparent JPEG output", () => {

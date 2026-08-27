@@ -14,9 +14,20 @@
   const BACKGROUND_VALUES = new Set(["auto", "opaque", "transparent"]);
   const MODERATION_VALUES = new Set(["auto", "low"]);
   const MAX_PROMPT_LENGTH = 32000;
+  const MIN_PIXELS = 655360;
   const MAX_PIXELS = 3840 * 2160;
   const EXPERIMENTAL_PIXELS = 2560 * 1440;
   const MAX_EDGE = 3840;
+  const SIZE_PRESETS = Object.freeze({
+    "1:1": Object.freeze({ "1k": "1024x1024", "2k": "2048x2048", "4k": "2880x2880" }),
+    "3:2": Object.freeze({ "1k": "1536x1024", "2k": "2048x1360", "4k": "3520x2352" }),
+    "2:3": Object.freeze({ "1k": "1024x1536", "2k": "1360x2048", "4k": "2352x3520" }),
+    "16:9": Object.freeze({ "1k": "1536x864", "2k": "2048x1152", "4k": "3840x2160" }),
+    "9:16": Object.freeze({ "1k": "864x1536", "2k": "1152x2048", "4k": "2160x3840" }),
+    "4:3": Object.freeze({ "1k": "1360x1024", "2k": "2048x1536", "4k": "3264x2448" }),
+    "3:4": Object.freeze({ "1k": "1024x1360", "2k": "1536x2048", "4k": "2448x3264" }),
+    "21:9": Object.freeze({ "1k": "1536x656", "2k": "2048x880", "4k": "3808x1632" }),
+  });
 
   function normalizeBaseUrl(value) {
     const raw = String(value || "").trim();
@@ -74,6 +85,9 @@
     if (ratio < 1 / 3 || ratio > 3) {
       return { error: "宽高比必须在 1:3 到 3:1 之间" };
     }
+    if (width * height < MIN_PIXELS) {
+      return { error: "总像素不能低于 655,360" };
+    }
     if (width > MAX_EDGE || height > MAX_EDGE || width * height > MAX_PIXELS) {
       return { error: "尺寸超过 GPT Image 2 当前最大分辨率范围" };
     }
@@ -83,6 +97,19 @@
       auto: false,
       experimental: width * height > EXPERIMENTAL_PIXELS,
     };
+  }
+
+  function resolvePresetSize(ratio, resolution) {
+    return SIZE_PRESETS[ratio]?.[resolution] || "";
+  }
+
+  function findSizePreset(size) {
+    for (const [ratio, resolutions] of Object.entries(SIZE_PRESETS)) {
+      for (const [resolution, presetSize] of Object.entries(resolutions)) {
+        if (presetSize === size) return { ratio, resolution };
+      }
+    }
+    return null;
   }
 
   function validateConnection(connection, options = {}) {
@@ -189,13 +216,17 @@
     BACKGROUND_VALUES,
     FORMAT_VALUES,
     MAX_PROMPT_LENGTH,
+    MIN_PIXELS,
     MODERATION_VALUES,
     QUALITY_VALUES,
+    SIZE_PRESETS,
     buildGenerationPayload,
+    findSizePreset,
     generationEndpoint,
     modelsEndpoint,
     normalizeBaseUrl,
     parseSize,
+    resolvePresetSize,
     validateConnection,
     validateGeneration,
   };

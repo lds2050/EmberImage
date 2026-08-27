@@ -12,7 +12,8 @@
     draftNew: false,
     keyStorage: "session",
     streamEnabled: false,
-    selectedSize: "1024x1024",
+    sizeSelection: { mode: "ratio", ratio: "1:1", resolution: "1k", width: 1024, height: 1024 },
+    sizeDialogDraft: null,
     history: [],
     logs: [],
     currentTaskId: null,
@@ -240,23 +241,128 @@
     $$(`${selector} button`).forEach((button) => button.classList.toggle("active", button.dataset.value === value));
   }
 
-  function currentSize() {
-    if (state.selectedSize !== "custom") return state.selectedSize;
-    return `${Number($("#custom-width").value)}x${Number($("#custom-height").value)}`;
+  const sizeModeLabels = { auto: "自动", ratio: "按比例", custom: "自定义宽高" };
+  const ratioIconClasses = {
+    "1:1": "ratio-square",
+    "3:2": "ratio-landscape",
+    "2:3": "ratio-portrait",
+    "16:9": "ratio-wide",
+    "9:16": "ratio-tall",
+    "4:3": "ratio-four-three",
+    "3:4": "ratio-three-four",
+    "21:9": "ratio-ultrawide",
+  };
+
+  function cloneSizeSelection(selection) {
+    return { ...selection };
   }
 
-  function selectSize(size) {
-    const standard = ["1024x1024", "1536x1024", "1024x1536", "1536x864"];
-    state.selectedSize = standard.includes(size) ? size : "custom";
-    $$(".size-option").forEach((button) => button.classList.toggle("active", button.dataset.size === state.selectedSize));
-    $("#custom-size-row").classList.toggle("hidden", state.selectedSize !== "custom");
-    if (state.selectedSize === "custom") {
-      const parsed = Validation.parseSize(size);
-      if (!parsed.error && !parsed.auto) {
-        $("#custom-width").value = parsed.width;
-        $("#custom-height").value = parsed.height;
-      }
+  function sizeForSelection(selection) {
+    if (selection.mode === "auto") return "auto";
+    if (selection.mode === "custom") return `${Number(selection.width)}x${Number(selection.height)}`;
+    return Validation.resolvePresetSize(selection.ratio, selection.resolution);
+  }
+
+  function currentSize() {
+    return sizeForSelection(state.sizeSelection);
+  }
+
+  function displaySize(size) {
+    return size === "auto" ? "自动" : size.replace("x", " × ");
+  }
+
+  function selectionFromSize(size) {
+    const fallback = { mode: "ratio", ratio: "1:1", resolution: "1k", width: 1024, height: 1024 };
+    if (!size || size === "auto") return { ...fallback, mode: "auto" };
+    const preset = Validation.findSizePreset(size);
+    if (preset) return { ...fallback, mode: "ratio", ...preset };
+    const parsed = Validation.parseSize(size);
+    if (!parsed.error && !parsed.auto) {
+      return { ...fallback, mode: "custom", width: parsed.width, height: parsed.height };
     }
+    return fallback;
+  }
+
+  function sizeSelectionMeta(selection) {
+    if (selection.mode === "auto") return "模型自动选择";
+    if (selection.mode === "custom") return "自定义宽高";
+    return `${selection.resolution.toUpperCase()} · ${selection.ratio}`;
+  }
+
+  function updateSizeSummary() {
+    const size = currentSize();
+    $("#size-summary-value").textContent = displaySize(size);
+    $("#size-summary-meta").textContent = `${sizeModeLabels[state.sizeSelection.mode]} · ${sizeSelectionMeta(state.sizeSelection)}`;
+    const icon = $("#open-size-dialog-button .ratio-icon");
+    const iconClass = state.sizeSelection.mode === "ratio" ? ratioIconClasses[state.sizeSelection.ratio] : "ratio-square";
+    icon.className = `ratio-icon ${iconClass}`;
+  }
+
+  function setSizeSelectionFromSize(size) {
+    state.sizeSelection = selectionFromSize(size);
+    updateSizeSummary();
+  }
+
+  function renderSizeDialogPreview() {
+    const draft = state.sizeDialogDraft;
+    if (!draft) return;
+    const size = sizeForSelection(draft);
+    const parsed = Validation.parseSize(size);
+    const error = parsed.error || "";
+    $("#size-dialog-preview-value").textContent = displaySize(size);
+    if (parsed.auto) {
+      $("#size-dialog-preview-note").textContent = "模型根据提示词决定";
+    } else if (!error) {
+      const megapixels = (parsed.width * parsed.height / 1e6).toFixed(1);
+      $("#size-dialog-preview-note").textContent = `${megapixels} MP${parsed.experimental ? " · 实验尺寸" : ""}`;
+    } else {
+      $("#size-dialog-preview-note").textContent = "请修正尺寸";
+    }
+    $("#size-dialog-error").textContent = error;
+    $("#confirm-size-dialog-button").disabled = Boolean(error);
+  }
+
+  function renderSizeDialog() {
+    const draft = state.sizeDialogDraft;
+    if (!draft) return;
+    selectSegment("#size-mode-control", draft.mode);
+    selectSegment("#resolution-control", draft.resolution);
+    $$("#ratio-control .ratio-option").forEach((button) => button.classList.toggle("active", button.dataset.ratio === draft.ratio));
+    $("#size-ratio-panel").classList.toggle("hidden", draft.mode !== "ratio");
+    $("#size-custom-panel").classList.toggle("hidden", draft.mode !== "custom");
+    if (draft.mode === "custom") {
+      $("#custom-width").value = draft.width;
+      $("#custom-height").value = draft.height;
+    }
+    renderSizeDialogPreview();
+  }
+
+  function openSizeDialog() {
+    state.sizeDialogDraft = cloneSizeSelection(state.sizeSelection);
+    $("#size-dialog-current").textContent = displaySize(currentSize());
+    renderSizeDialog();
+    $("#size-dialog-overlay").classList.remove("hidden");
+  }
+
+  function closeSizeDialog() {
+    $("#size-dialog-overlay").classList.add("hidden");
+    state.sizeDialogDraft = null;
+  }
+
+  function confirmSizeDialog() {
+    const draft = state.sizeDialogDraft;
+    if (!draft) return;
+    if (draft.mode === "custom") {
+      draft.width = Number($("#custom-width").value);
+      draft.height = Number($("#custom-height").value);
+    }
+    const parsed = Validation.parseSize(sizeForSelection(draft));
+    if (parsed.error) {
+      renderSizeDialogPreview();
+      return;
+    }
+    state.sizeSelection = cloneSizeSelection(draft);
+    closeSizeDialog();
     updateGenerationState();
   }
 
@@ -296,16 +402,11 @@
     const parameters = collectParameters();
     const validation = Validation.validateGeneration(parameters);
     const profile = activeProfile();
+    updateSizeSummary();
     showGenerationErrors(parameters.prompt.length ? validation.errors : { ...validation.errors, prompt: "" });
     $("#prompt-count").textContent = parameters.prompt.length.toLocaleString();
-    const parsed = Validation.parseSize(parameters.size);
-    if (!parsed.error && !parsed.auto) {
-      const ratio = parsed.width / parsed.height;
-      const ratioText = Math.abs(ratio - 1) < 0.01 ? "1:1" : ratio > 1 ? `${ratio.toFixed(2)}:1` : `1:${(1 / ratio).toFixed(2)}`;
-      $("#size-hint").textContent = `${ratioText} · ${(parsed.width * parsed.height / 1e6).toFixed(1)} MP`;
-    }
     const streamText = parameters.stream ? " · 流式预览" : "";
-    $("#parameter-summary").textContent = `${parameters.size.replace("x", "×")} · ${qualityLabels[parameters.quality]}质量 · ${parameters.outputFormat.toUpperCase()}${streamText}`;
+    $("#parameter-summary").textContent = `${displaySize(parameters.size)} · ${qualityLabels[parameters.quality]}质量 · ${parameters.outputFormat.toUpperCase()}${streamText}`;
     const ready = validation.valid && Boolean(profile?.isUnlocked) && !state.isGenerating;
     $("#generate-button").disabled = !ready;
     if (!parameters.prompt.trim()) $("#validation-summary").textContent = "填写画面描述后即可开始生成";
@@ -317,7 +418,7 @@
   }
 
   function resetParameters() {
-    selectSize("1024x1024");
+    setSizeSelectionFromSize("1024x1024");
     selectSegment("#quality-control", "auto");
     selectSegment("#background-control", "auto");
     selectSegment("#format-control", "png");
@@ -333,7 +434,7 @@
     $("#prompt-input").value = entry.prompt || "";
     if (!promptOnly) {
       const p = entry.parameters || {};
-      selectSize(p.size || "1024x1024");
+      setSizeSelectionFromSize(p.size || "1024x1024");
       selectSegment("#quality-control", p.quality || "auto");
       selectSegment("#background-control", p.background || "auto");
       selectSegment("#format-control", p.outputFormat || "png");
@@ -641,6 +742,7 @@
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     closeImageViewer();
+    closeSizeDialog();
     $("#request-log-overlay").classList.add("hidden");
   });
 
@@ -654,8 +756,32 @@
     prompt.value = `${prompt.value.trim()}${prompt.value.trim() ? "，" : ""}${button.dataset.style}`;
     updateGenerationState();
   }));
-  $$(".size-option").forEach((button) => button.addEventListener("click", () => selectSize(button.dataset.size)));
-  ["#custom-width", "#custom-height", "#count-input"].forEach((selector) => $(selector).addEventListener("input", updateGenerationState));
+  $("#open-size-dialog-button").addEventListener("click", openSizeDialog);
+  $("#close-size-dialog-button").addEventListener("click", closeSizeDialog);
+  $("#cancel-size-dialog-button").addEventListener("click", closeSizeDialog);
+  $("#confirm-size-dialog-button").addEventListener("click", confirmSizeDialog);
+  $("#size-dialog-overlay").addEventListener("click", (event) => {
+    if (event.target === $("#size-dialog-overlay")) closeSizeDialog();
+  });
+  $$("#size-mode-control button").forEach((button) => button.addEventListener("click", () => {
+    state.sizeDialogDraft.mode = button.dataset.value;
+    renderSizeDialog();
+  }));
+  $$("#resolution-control button").forEach((button) => button.addEventListener("click", () => {
+    state.sizeDialogDraft.resolution = button.dataset.value;
+    renderSizeDialog();
+  }));
+  $$("#ratio-control .ratio-option").forEach((button) => button.addEventListener("click", () => {
+    state.sizeDialogDraft.ratio = button.dataset.ratio;
+    renderSizeDialog();
+  }));
+  ["#custom-width", "#custom-height"].forEach((selector) => $(selector).addEventListener("input", () => {
+    if (!state.sizeDialogDraft) return;
+    state.sizeDialogDraft.width = Number($("#custom-width").value);
+    state.sizeDialogDraft.height = Number($("#custom-height").value);
+    renderSizeDialogPreview();
+  }));
+  $("#count-input").addEventListener("input", updateGenerationState);
   ["#quality-control", "#background-control", "#format-control", "#moderation-control"].forEach((selector) => {
     $$(`${selector} button`).forEach((button) => button.addEventListener("click", () => {
       selectSegment(selector, button.dataset.value);
