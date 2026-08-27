@@ -57,7 +57,7 @@ jobs:
         run: npm run ${{ matrix.script }}
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.path }}
@@ -71,7 +71,7 @@ jobs:
 
     steps:
       - name: Download installers
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: installers
           merge-multiple: true
@@ -79,4 +79,4 @@ jobs:
       - name: Create release and upload installers
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" installers/* --verify-tag --generate-notes --title "EmberImage $GITHUB_REF_NAME"
+        run: gh release create "$GITHUB_REF_NAME" installers/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "EmberImage $GITHUB_REF_NAME"
