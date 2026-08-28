@@ -83,3 +83,31 @@ test("updates favorites and keeps request logs bounded", async () => {
     assert.equal(logs.at(-1).id, "5");
   });
 });
+
+test("serializes concurrent writes to the same JSON file without losing entries", async () => {
+  await withStorage(async (storage) => {
+    await Promise.all(Array.from({ length: 40 }, (_, index) => storage.addLog({ id: `log-${index}` })));
+    const logs = await storage.listLogs();
+    assert.equal(new Set(logs.map((log) => log.id)).size, 40);
+
+    await Promise.all(Array.from({ length: 10 }, (_, index) => storage.addHistory({ id: `entry-${index}`, favorite: false, images: [] })));
+    await Promise.all(Array.from({ length: 10 }, (_, index) => storage.updateHistory(`entry-${index}`, { favorite: true })));
+    const history = await storage.listHistory();
+    assert.equal(history.length, 10);
+    assert.ok(history.every((entry) => entry.favorite === true));
+  });
+});
+
+test("quarantines corrupt JSON instead of failing forever", async () => {
+  await withStorage(async (storage, directory) => {
+    await fs.writeFile(path.join(directory, "history.json"), "{not valid json");
+    const history = await storage.listHistory();
+    assert.deepEqual(history, []);
+    const entries = await fs.readdir(directory);
+    assert.ok(entries.some((name) => name.startsWith("history.json.corrupt-")));
+    assert.ok(!entries.includes("history.json"));
+
+    await storage.addHistory({ id: "after-recovery", favorite: false, images: [] });
+    assert.equal((await storage.listHistory()).length, 1);
+  });
+});

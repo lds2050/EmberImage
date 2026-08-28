@@ -100,11 +100,19 @@ function getProfile(config, id = config.activeConnectionId) {
   return profile;
 }
 
+function isLocalHostname(hostname) {
+  // URL.hostname keeps brackets around IPv6 literals ("[::1]"), so strip them before comparing.
+  const bare = String(hostname || "").replace(/^\[|\]$/g, "");
+  return ["localhost", "127.0.0.1", "::1", "0.0.0.0"].includes(bare);
+}
+
+function isSecureEndpoint(url) {
+  return url.protocol === "https:" || (url.protocol === "http:" && isLocalHostname(url.hostname));
+}
+
 function assertSecureBaseUrl(baseUrl) {
   const normalized = Validation.normalizeBaseUrl(baseUrl);
-  const url = new URL(normalized);
-  const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
-  if (url.protocol !== "https:" && !localHosts.has(url.hostname)) {
+  if (!isSecureEndpoint(new URL(normalized))) {
     throw new AppError("非本机 API 地址必须使用 HTTPS", { code: "insecure_endpoint" });
   }
   return normalized;
@@ -301,7 +309,6 @@ async function testConnection(connection = {}) {
   const saved = connection.id ? config.connections.find((item) => item.id === connection.id) : null;
   const profile = { ...DEFAULT_PROFILE, ...(saved || {}), ...connection, name: connection.name || saved?.name || "未保存连接" };
   if (connection.apiKey) sessionApiKeys.set(profile.id, String(connection.apiKey).trim());
-  const baseUrl = assertSecureBaseUrl(profile.baseUrl);
   const apiKey = String(connection.apiKey || sessionApiKeys.get(profile.id) || "").trim();
   const validated = Validation.validateConnection({ ...profile, apiKey }, { requireKey: true });
   if (!validated.valid) {
@@ -309,6 +316,7 @@ async function testConnection(connection = {}) {
     error.details = validated.errors;
     throw error;
   }
+  const baseUrl = assertSecureBaseUrl(profile.baseUrl);
 
   const endpoint = Validation.modelsEndpoint(baseUrl);
   const startedAt = Date.now();
@@ -355,13 +363,32 @@ function mimeForFormat(format) {
   return "image/png";
 }
 
+const MAX_IMAGE_REDIRECTS = 5;
+
 async function downloadCompatibleImage(url, signal) {
-  const target = new URL(url);
-  const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
-  if (target.protocol !== "https:" && !(target.protocol === "http:" && localHosts.has(target.hostname))) throw new AppError("兼容接口返回了不安全的图片地址", { code: "unsafe_image_url" });
-  const response = await fetch(target, { signal });
-  if (!response.ok) throw apiErrorFromResponse(response, await readResponseBody(response));
-  return Buffer.from(await response.arrayBuffer());
+  const origin = new URL(url);
+  if (!isSecureEndpoint(origin)) throw new AppError("兼容接口返回了不安全的图片地址", { code: "unsafe_image_url" });
+  // 远端地址发起的下载不允许重定向降级到 HTTP，防止远端服务借本机白名单探测内网；
+  // 只有原始地址本身就是本机 HTTP 时，后续跳转才允许停留在本机 HTTP。
+  const originIsLocalHttp = origin.protocol === "http:";
+  let target = origin;
+  for (let hop = 0; ; hop += 1) {
+    const response = await fetch(target, { signal, redirect: "manual" });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (!location || hop >= MAX_IMAGE_REDIRECTS) {
+        throw new AppError("图片地址重定向次数过多或目标无效", { code: "unsafe_image_url" });
+      }
+      target = new URL(location, target);
+      const localHttpHop = target.protocol === "http:" && isLocalHostname(target.hostname);
+      if (target.protocol !== "https:" && !(originIsLocalHttp && localHttpHop)) {
+        throw new AppError("兼容接口返回了不安全的图片地址", { code: "unsafe_image_url" });
+      }
+      continue;
+    }
+    if (!response.ok) throw apiErrorFromResponse(response, await readResponseBody(response));
+    return Buffer.from(await response.arrayBuffer());
+  }
 }
 
 function safeTaskId(taskId) {
@@ -610,9 +637,18 @@ function registerIpcHandlers() {
 }
 
 app.whenReady().then(async () => {
-  storage = new AppStorage(app.getPath("userData"));
-  await storage.initialize();
-  deviceEncryptionKey = await storage.getOrCreateDeviceKey();
+  try {
+    storage = new AppStorage(app.getPath("userData"));
+    await storage.initialize();
+    deviceEncryptionKey = await storage.getOrCreateDeviceKey();
+  } catch (error) {
+    dialog.showErrorBox(
+      "EmberImage 无法启动",
+      `本地数据初始化失败：${error?.message || error}\n数据目录：${app.getPath("userData")}\n可尝试备份并移除其中的 device-encryption.key 后重启（已加密保存的密钥需要重新输入）。`
+    );
+    app.quit();
+    return;
+  }
   const icon = loadAppIcon();
   if (process.platform === "darwin" && !icon.isEmpty()) app.dock.setIcon(icon);
   registerIpcHandlers();

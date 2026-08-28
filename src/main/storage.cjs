@@ -30,6 +30,18 @@ class AppStorage {
     this.logsPath = path.join(rootDirectory, "request-logs.json");
     this.deviceKeyPath = path.join(rootDirectory, "device-encryption.key");
     this.resultsDirectory = path.join(rootDirectory, "results");
+    this.fileQueues = new Map();
+  }
+
+  runExclusive(filePath, operation) {
+    const previous = this.fileQueues.get(filePath) || Promise.resolve();
+    const result = previous.catch(() => {}).then(operation);
+    const chain = result.catch(() => {});
+    this.fileQueues.set(filePath, chain);
+    chain.then(() => {
+      if (this.fileQueues.get(filePath) === chain) this.fileQueues.delete(filePath);
+    });
+    return result;
   }
 
   async initialize() {
@@ -41,7 +53,8 @@ class AppStorage {
       return JSON.parse(await fs.readFile(filePath, "utf8"));
     } catch (error) {
       if (error.code === "ENOENT") return fallback;
-      throw error;
+      await fs.rename(filePath, `${filePath}.corrupt-${Date.now()}`).catch(() => {});
+      return fallback;
     }
   }
 
@@ -55,19 +68,21 @@ class AppStorage {
   }
 
   async getOrCreateDeviceKey() {
-    try {
-      const encoded = (await fs.readFile(this.deviceKeyPath, "utf8")).trim();
-      const key = Buffer.from(encoded, "base64");
-      if (key.length !== 32) throw new Error("本机加密设备密钥格式无效");
-      return key;
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-      const key = crypto.randomBytes(32);
-      const temporaryPath = `${this.deviceKeyPath}.tmp`;
-      await fs.writeFile(temporaryPath, `${key.toString("base64")}\n`, { encoding: "utf8", mode: 0o600 });
-      await fs.rename(temporaryPath, this.deviceKeyPath);
-      return key;
-    }
+    return this.runExclusive(this.deviceKeyPath, async () => {
+      try {
+        const encoded = (await fs.readFile(this.deviceKeyPath, "utf8")).trim();
+        const key = Buffer.from(encoded, "base64");
+        if (key.length !== 32) throw new Error("本机加密设备密钥格式无效");
+        return key;
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+        const key = crypto.randomBytes(32);
+        const temporaryPath = `${this.deviceKeyPath}.tmp`;
+        await fs.writeFile(temporaryPath, `${key.toString("base64")}\n`, { encoding: "utf8", mode: 0o600 });
+        await fs.rename(temporaryPath, this.deviceKeyPath);
+        return key;
+      }
+    });
   }
 
   async loadConfig() {
@@ -93,7 +108,7 @@ class AppStorage {
         downloadDirectory: stored.downloadDirectory || "",
         connections: [migrated],
       };
-      await this.writeJson(this.configPath, config);
+      await this.runExclusive(this.configPath, () => this.writeJson(this.configPath, config));
       return config;
     }
 
@@ -110,7 +125,7 @@ class AppStorage {
       version: 2,
       connections: config.connections.map((profile) => ({ ...DEFAULT_PROFILE, ...profile })),
     };
-    await this.writeJson(this.configPath, next);
+    await this.runExclusive(this.configPath, () => this.writeJson(this.configPath, next));
     return next;
   }
 
@@ -120,30 +135,36 @@ class AppStorage {
   }
 
   async addHistory(entry) {
-    const history = await this.listHistory();
-    history.unshift(entry);
-    await this.writeJson(this.historyPath, history.slice(0, 200));
-    return entry;
+    return this.runExclusive(this.historyPath, async () => {
+      const history = await this.listHistory();
+      history.unshift(entry);
+      await this.writeJson(this.historyPath, history.slice(0, 200));
+      return entry;
+    });
   }
 
   async removeHistory(id) {
-    const history = await this.listHistory();
-    const next = history.filter((entry) => entry.id !== id);
-    await this.writeJson(this.historyPath, next);
-    return history.length !== next.length;
+    return this.runExclusive(this.historyPath, async () => {
+      const history = await this.listHistory();
+      const next = history.filter((entry) => entry.id !== id);
+      await this.writeJson(this.historyPath, next);
+      return history.length !== next.length;
+    });
   }
 
   async clearHistory() {
-    await this.writeJson(this.historyPath, []);
+    return this.runExclusive(this.historyPath, () => this.writeJson(this.historyPath, []));
   }
 
   async updateHistory(id, changes) {
-    const history = await this.listHistory();
-    const index = history.findIndex((entry) => entry.id === id);
-    if (index < 0) return null;
-    history[index] = { ...history[index], ...changes };
-    await this.writeJson(this.historyPath, history);
-    return history[index];
+    return this.runExclusive(this.historyPath, async () => {
+      const history = await this.listHistory();
+      const index = history.findIndex((entry) => entry.id === id);
+      if (index < 0) return null;
+      history[index] = { ...history[index], ...changes };
+      await this.writeJson(this.historyPath, history);
+      return history[index];
+    });
   }
 
   async listLogs() {
@@ -152,22 +173,26 @@ class AppStorage {
   }
 
   async addLog(entry) {
-    const logs = await this.listLogs();
-    logs.unshift(entry);
-    await this.writeJson(this.logsPath, logs.slice(0, 500));
-    return entry;
+    return this.runExclusive(this.logsPath, async () => {
+      const logs = await this.listLogs();
+      logs.unshift(entry);
+      await this.writeJson(this.logsPath, logs.slice(0, 500));
+      return entry;
+    });
   }
 
   async clearLogs() {
-    await this.writeJson(this.logsPath, []);
+    return this.runExclusive(this.logsPath, () => this.writeJson(this.logsPath, []));
   }
 
   async writeResult(filename, bytes) {
     const filePath = path.join(this.resultsDirectory, filename);
-    const temporaryPath = `${filePath}.tmp`;
-    await fs.writeFile(temporaryPath, bytes, { mode: 0o600 });
-    await fs.rename(temporaryPath, filePath);
-    return filePath;
+    return this.runExclusive(filePath, async () => {
+      const temporaryPath = `${filePath}.tmp`;
+      await fs.writeFile(temporaryPath, bytes, { mode: 0o600 });
+      await fs.rename(temporaryPath, filePath);
+      return filePath;
+    });
   }
 }
 
