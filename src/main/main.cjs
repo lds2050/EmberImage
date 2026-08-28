@@ -601,6 +601,10 @@ function registerIpcHandlers() {
   ipcMain.handle("image:save", withResult(saveImage));
   ipcMain.handle("image:save-many", withResult(saveImages));
   ipcMain.handle("image:copy", withResult(async (filePath) => copyImage(filePath)));
+  ipcMain.handle("clipboard:write-text", withResult(async (value) => {
+    clipboard.writeText(String(value || ""));
+    return { copied: true };
+  }));
   ipcMain.handle("image:reveal", withResult(async (filePath) => { shell.showItemInFolder(assertResultPath(filePath)); return { revealed: true }; }));
   ipcMain.handle("app:info", withResult(async () => ({ version: app.getVersion(), platform: process.platform })));
 }

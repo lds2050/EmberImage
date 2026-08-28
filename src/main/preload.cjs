@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld("imageStudio", {
   saveImage: (image) => ipcRenderer.invoke("image:save", image),
   saveImages: (images) => ipcRenderer.invoke("image:save-many", images),
   copyImage: (filePath) => ipcRenderer.invoke("image:copy", filePath),
+  copyText: (value) => ipcRenderer.invoke("clipboard:write-text", value),
   revealImage: (filePath) => ipcRenderer.invoke("image:reveal", filePath),
   getAppInfo: () => ipcRenderer.invoke("app:info"),
 });

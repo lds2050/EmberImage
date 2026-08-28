@@ -3,6 +3,7 @@
 
   const api = window.imageStudio;
   const Validation = window.ImageStudioValidation;
+  const PresetCatalog = window.EmberImagePresets || { categories: [], presets: [] };
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -22,6 +23,8 @@
     isGenerating: false,
     lastEntry: null,
     favoriteOnly: false,
+    exampleCategory: "all",
+    selectedExampleId: null,
   };
 
   function unwrap(result) {
@@ -62,6 +65,7 @@
     $$(".view").forEach((view) => view.classList.toggle("active", view.dataset.view === viewName));
     $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.viewTarget === viewName));
     if (viewName === "history") loadHistory();
+    if (viewName === "examples") renderExamples();
     if (viewName === "settings") loadLogs();
   }
 
@@ -446,7 +450,111 @@
     }
     updateGenerationState();
     navigate("generate");
-    $("#prompt-input").focus();
+    const promptInput = $("#prompt-input");
+    promptInput.focus();
+    promptInput.setSelectionRange(0, 0);
+    promptInput.scrollTop = 0;
+  }
+
+  function exampleCategoryLabel(categoryId) {
+    return PresetCatalog.categories.find((category) => category.id === categoryId)?.label || "样例";
+  }
+
+  function exampleParameterBadges(preset) {
+    const parameters = preset.parameters || {};
+    return [
+      displaySize(parameters.size || "auto"),
+      `${qualityLabels[parameters.quality] || parameters.quality || "自动"}质量`,
+      backgroundLabels[parameters.background] || parameters.background,
+      String(parameters.outputFormat || "png").toUpperCase(),
+      `${Number(parameters.n) || 1} 张`,
+    ].filter(Boolean);
+  }
+
+  function filteredExamples() {
+    const query = $("#example-search").value.trim().toLowerCase();
+    return PresetCatalog.presets.filter((preset) => {
+      if (state.exampleCategory !== "all" && preset.category !== state.exampleCategory) return false;
+      if (!query) return true;
+      return `${preset.title} ${preset.summary} ${preset.tags.join(" ")} ${preset.prompt}`.toLowerCase().includes(query);
+    });
+  }
+
+  function renderExampleCategories() {
+    const list = $("#example-category-list");
+    list.innerHTML = "";
+    PresetCatalog.categories.forEach((category) => {
+      const count = category.id === "all"
+        ? PresetCatalog.presets.length
+        : PresetCatalog.presets.filter((preset) => preset.category === category.id).length;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = state.exampleCategory === category.id ? "active" : "";
+      button.innerHTML = `<span>${escapeHtml(category.label)}</span><small>${count}</small>`;
+      button.addEventListener("click", () => {
+        state.exampleCategory = category.id;
+        renderExamples();
+      });
+      list.append(button);
+    });
+  }
+
+  function openExampleDetail(preset) {
+    state.selectedExampleId = preset.id;
+    $("#example-detail-image").src = preset.imagePath;
+    $("#example-detail-image").alt = preset.title;
+    $("#example-detail-category").textContent = exampleCategoryLabel(preset.category);
+    $("#example-detail-title").textContent = preset.title;
+    $("#example-detail-summary").textContent = preset.summary;
+    $("#example-detail-prompt").textContent = preset.prompt;
+    $("#example-detail-parameters").innerHTML = exampleParameterBadges(preset)
+      .map((label) => `<span>${escapeHtml(label)}</span>`)
+      .join("");
+    $("#example-detail-overlay").classList.remove("hidden");
+  }
+
+  function closeExampleDetail() {
+    state.selectedExampleId = null;
+    $("#example-detail-overlay").classList.add("hidden");
+    $("#example-detail-image").removeAttribute("src");
+  }
+
+  function useExample(preset) {
+    closeExampleDetail();
+    restoreEntryParameters(preset);
+    toast(`已套用“${preset.title}”的提示词和参数`);
+  }
+
+  function renderExamples() {
+    renderExampleCategories();
+    const examples = filteredExamples();
+    const list = $("#example-list");
+    list.innerHTML = "";
+    $("#example-summary").textContent = `${examples.length} 个可复用样例`;
+    $("#examples-empty").classList.toggle("hidden", examples.length > 0);
+    list.classList.toggle("hidden", examples.length === 0);
+
+    examples.forEach((preset) => {
+      const card = document.createElement("article");
+      card.className = "example-card";
+      const tags = preset.tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join("");
+      const parameters = exampleParameterBadges(preset).slice(0, 3).map((label) => `<span>${escapeHtml(label)}</span>`).join("");
+      card.innerHTML = `
+        <button class="example-card-visual" type="button" aria-label="查看${escapeHtml(preset.title)}样例详情">
+          <img src="${escapeHtml(preset.imagePath)}" alt="${escapeHtml(preset.title)}" />
+          <span class="example-card-category">${escapeHtml(exampleCategoryLabel(preset.category))}</span>
+          <span class="example-card-open">查看详情 ↗</span>
+        </button>
+        <div class="example-card-content">
+          <div class="example-card-title-row"><div><h3>${escapeHtml(preset.title)}</h3><p>${escapeHtml(preset.summary)}</p></div><button type="button" data-action="use">使用</button></div>
+          <div class="example-card-tags">${tags}</div>
+          <p class="example-card-prompt">${escapeHtml(preset.prompt)}</p>
+          <div class="example-card-parameters">${parameters}</div>
+        </div>`;
+      card.querySelector(".example-card-visual").addEventListener("click", () => openExampleDetail(preset));
+      card.querySelector('[data-action="use"]').addEventListener("click", () => useExample(preset));
+      list.append(card);
+    });
   }
 
   function setResultMode(mode) {
@@ -728,6 +836,7 @@
     populateConnectionEditor(activeProfile());
     updateConnectionStatus();
     renderHistory();
+    renderExamples();
     updateFormatDependencies();
     updateGenerationState();
   }
@@ -743,6 +852,7 @@
     if (event.key !== "Escape") return;
     closeImageViewer();
     closeSizeDialog();
+    closeExampleDetail();
     $("#request-log-overlay").classList.add("hidden");
   });
 
@@ -804,6 +914,22 @@
   });
 
   $("#history-search").addEventListener("input", renderHistory);
+  $("#example-search").addEventListener("input", renderExamples);
+  $("#close-example-detail-button").addEventListener("click", closeExampleDetail);
+  $("#cancel-example-detail-button").addEventListener("click", closeExampleDetail);
+  $("#example-detail-overlay").addEventListener("click", (event) => {
+    if (event.target === $("#example-detail-overlay")) closeExampleDetail();
+  });
+  $("#use-example-button").addEventListener("click", () => {
+    const preset = PresetCatalog.presets.find((item) => item.id === state.selectedExampleId);
+    if (preset) useExample(preset);
+  });
+  $("#copy-example-prompt-button").addEventListener("click", async () => {
+    const preset = PresetCatalog.presets.find((item) => item.id === state.selectedExampleId);
+    if (!preset) return;
+    try { unwrap(await api.copyText(preset.prompt)); toast("提示词已复制"); }
+    catch (error) { toast(error.message, "error"); }
+  });
   $("#favorite-filter-button").addEventListener("click", () => { state.favoriteOnly = !state.favoriteOnly; renderHistory(); });
   $("#clear-history-button").addEventListener("click", async () => {
     if (!window.confirm("清空全部历史索引？已生成的原图文件会保留。")) return;
