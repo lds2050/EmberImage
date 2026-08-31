@@ -23,3 +23,7 @@ secrets.json
 *.dmg
 *.exe
 *.blockmap
+
+# Internal docs stay local; never publish to GitHub (release notes and README excepted).
+docs/PRD-*.md
+docs/HANDOFF-*.md
