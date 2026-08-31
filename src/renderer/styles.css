@@ -429,7 +429,8 @@ summary:focus-visible {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
-  min-height: 0;
+  /* 压缩下限：内容更高时左栏整体滚动，避免提示词面板被压塌与下方面板重叠 */
+  min-height: 232px;
 }
 
 .panel {
