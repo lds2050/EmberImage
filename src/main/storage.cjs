@@ -13,6 +13,8 @@ const DEFAULT_PROFILE = {
   encryptedKey: null,
   requestTimeoutSeconds: 180,
   streamEnabled: false,
+  generationCapability: "unknown",
+  editCapability: "unknown",
 };
 
 const DEFAULT_CONFIG = {
@@ -22,6 +24,20 @@ const DEFAULT_CONFIG = {
   downloadDirectory: "",
 };
 
+const HISTORY_VERSION = 3;
+const HISTORY_LIMIT = 200;
+
+function normalizeHistoryEntry(entry) {
+  const item = entry && typeof entry === "object" ? entry : {};
+  return {
+    operation: "generate",
+    editMode: "",
+    inputs: [],
+    mask: null,
+    ...item,
+  };
+}
+
 class AppStorage {
   constructor(rootDirectory) {
     this.rootDirectory = rootDirectory;
@@ -30,6 +46,9 @@ class AppStorage {
     this.logsPath = path.join(rootDirectory, "request-logs.json");
     this.deviceKeyPath = path.join(rootDirectory, "device-encryption.key");
     this.resultsDirectory = path.join(rootDirectory, "results");
+    this.historyMediaDirectory = path.join(rootDirectory, "history-media");
+    this.tmpDirectory = path.join(rootDirectory, "tmp");
+    this.thumbsDirectory = path.join(rootDirectory, "thumbs");
     this.fileQueues = new Map();
   }
 
@@ -46,6 +65,28 @@ class AppStorage {
 
   async initialize() {
     await fs.mkdir(this.resultsDirectory, { recursive: true, mode: 0o700 });
+    await fs.mkdir(this.historyMediaDirectory, { recursive: true, mode: 0o700 });
+    await fs.mkdir(this.tmpDirectory, { recursive: true, mode: 0o700 });
+    await fs.mkdir(this.thumbsDirectory, { recursive: true, mode: 0o700 });
+    await this.migrateHistory();
+  }
+
+  _safeSegment(value) {
+    const segment = String(value || "").replace(/[^a-zA-Z0-9_-]/g, "");
+    if (!segment) throw new Error("无效的目录名称");
+    return segment.slice(0, 80);
+  }
+
+  async migrateHistory() {
+    let raw;
+    try {
+      raw = JSON.parse(await fs.readFile(this.historyPath, "utf8"));
+    } catch {
+      return;
+    }
+    if (!Array.isArray(raw)) return;
+    const entries = raw.map((entry) => normalizeHistoryEntry(entry)).slice(0, HISTORY_LIMIT);
+    await this.runExclusive(this.historyPath, () => this.writeJson(this.historyPath, { version: HISTORY_VERSION, entries }));
   }
 
   async readJson(filePath, fallback) {
@@ -129,42 +170,85 @@ class AppStorage {
     return next;
   }
 
+  async _readHistoryEntries() {
+    const stored = await this.readJson(this.historyPath, null);
+    let entries;
+    if (Array.isArray(stored)) entries = stored;
+    else if (stored && Array.isArray(stored.entries)) entries = stored.entries;
+    else entries = [];
+    return entries.map((entry) => normalizeHistoryEntry(entry));
+  }
+
   async listHistory() {
-    const history = await this.readJson(this.historyPath, []);
-    return Array.isArray(history) ? history : [];
+    return this._readHistoryEntries();
   }
 
   async addHistory(entry) {
     return this.runExclusive(this.historyPath, async () => {
-      const history = await this.listHistory();
-      history.unshift(entry);
-      await this.writeJson(this.historyPath, history.slice(0, 200));
+      const entries = await this._readHistoryEntries();
+      entries.unshift(normalizeHistoryEntry(entry));
+      await this.writeJson(this.historyPath, { version: HISTORY_VERSION, entries: entries.slice(0, HISTORY_LIMIT) });
       return entry;
     });
   }
 
   async removeHistory(id) {
     return this.runExclusive(this.historyPath, async () => {
-      const history = await this.listHistory();
-      const next = history.filter((entry) => entry.id !== id);
-      await this.writeJson(this.historyPath, next);
-      return history.length !== next.length;
+      const entries = await this._readHistoryEntries();
+      const next = entries.filter((entry) => entry.id !== id);
+      await this.writeJson(this.historyPath, { version: HISTORY_VERSION, entries: next });
+      return entries.length !== next.length;
     });
   }
 
   async clearHistory() {
-    return this.runExclusive(this.historyPath, () => this.writeJson(this.historyPath, []));
+    return this.runExclusive(this.historyPath, () => this.writeJson(this.historyPath, { version: HISTORY_VERSION, entries: [] }));
   }
 
   async updateHistory(id, changes) {
     return this.runExclusive(this.historyPath, async () => {
-      const history = await this.listHistory();
-      const index = history.findIndex((entry) => entry.id === id);
+      const entries = await this._readHistoryEntries();
+      const index = entries.findIndex((entry) => entry.id === id);
       if (index < 0) return null;
-      history[index] = { ...history[index], ...changes };
-      await this.writeJson(this.historyPath, history);
-      return history[index];
+      entries[index] = { ...entries[index], ...changes };
+      await this.writeJson(this.historyPath, { version: HISTORY_VERSION, entries });
+      return entries[index];
     });
+  }
+
+  async createTaskTempDir(taskId) {
+    const dir = path.join(this.tmpDirectory, this._safeSegment(taskId));
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    return dir;
+  }
+
+  async cleanTaskTempDir(taskId) {
+    const dir = path.join(this.tmpDirectory, this._safeSegment(taskId));
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+
+  async promoteTaskMedia(taskId, entryId) {
+    const source = path.join(this.tmpDirectory, this._safeSegment(taskId));
+    const destination = path.join(this.historyMediaDirectory, this._safeSegment(entryId));
+    await fs.mkdir(this.historyMediaDirectory, { recursive: true, mode: 0o700 });
+    await fs.rm(destination, { recursive: true, force: true });
+    await fs.rename(source, destination);
+    return destination;
+  }
+
+  async writeThumbnail(filename, bytes) {
+    const filePath = path.join(this.thumbsDirectory, this._safeSegment(filename));
+    await fs.writeFile(filePath, bytes, { mode: 0o600 });
+    return filePath;
+  }
+
+  assertAllowedPath(filePath, root) {
+    const resolvedRoot = path.resolve(root);
+    const target = path.resolve(String(filePath));
+    if (target !== resolvedRoot && !target.startsWith(`${resolvedRoot}${path.sep}`)) {
+      throw new Error("无效的文件路径");
+    }
+    return target;
   }
 
   async listLogs() {

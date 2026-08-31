@@ -54,18 +54,67 @@
           </button>
         </div>
 
-        <p class="version-label" id="version-label">V0.4.1</p>
+        <p class="version-label" id="version-label">V0.5.0</p>
       </aside>
 
       <main class="main-area">
+        <div class="window-drag-strip" aria-hidden="true"></div>
         <section class="view active" id="view-generate" data-view="generate">
+          <div class="creation-mode-row">
+            <div class="segmented-control creation-mode-control" id="creation-mode-control">
+              <button type="button" data-value="generate" class="active">文字生图</button>
+              <button type="button" data-value="edit">图片编辑</button>
+            </div>
+            <span class="creation-mode-hint" id="creation-mode-hint">输入描述，生成全新图片</span>
+          </div>
           <div class="studio-grid">
             <div class="composer-column">
+              <section class="panel asset-panel hidden" id="asset-panel">
+                <div class="panel-heading compact">
+                  <div>
+                    <span class="section-number" id="asset-section-number">01</span>
+                    <h2 id="asset-panel-title">图片素材</h2>
+                  </div>
+                  <span class="asset-count" id="asset-count">0 / 16</span>
+                </div>
+                <div class="edit-scope-row">
+                  <div class="segmented-control edit-scope-control" id="edit-scope-control">
+                    <button type="button" data-value="full" class="active">整体编辑</button>
+                    <button type="button" data-value="mask">局部编辑</button>
+                  </div>
+                  <span class="edit-scope-hint" id="edit-scope-hint">提示词与全部输入图共同决定输出</span>
+                </div>
+                <div class="mask-status hidden" id="mask-status">
+                  <div class="mask-status-empty" id="mask-status-empty">
+                    <button class="secondary-button compact" id="open-mask-editor-button" type="button">编辑区域</button>
+                    <span id="mask-status-empty-hint">请先添加主图</span>
+                  </div>
+                  <div class="mask-status-set hidden" id="mask-status-set">
+                    <img id="mask-status-thumb" alt="编辑区域预览" />
+                    <div class="mask-status-info">
+                      <strong>已标记编辑区域</strong>
+                      <small id="mask-status-size"></small>
+                    </div>
+                    <div class="mask-status-actions">
+                      <button class="text-button" id="mask-redraw-button" type="button">重绘</button>
+                      <button class="text-button danger" id="mask-clear-button" type="button">清除</button>
+                    </div>
+                  </div>
+                  <p class="field-error" id="mask-error"></p>
+                </div>
+                <div class="upload-zone" id="upload-zone" role="button" tabindex="0" aria-label="添加图片">
+                  <p class="upload-zone-title" id="upload-zone-title">点击、拖入或粘贴图片</p>
+                  <p class="upload-zone-hint">PNG · JPEG · WebP · 单张 ≤ 50 MB · 最多 16 张 · 第 1 张为主图</p>
+                </div>
+                <p class="field-error" id="asset-error"></p>
+                <div class="asset-grid" id="asset-grid"></div>
+              </section>
+
               <section class="panel prompt-panel">
                 <div class="panel-heading compact">
                   <div>
-                    <span class="section-number">01</span>
-                    <h2>描述画面</h2>
+                    <span class="section-number" id="prompt-section-number">01</span>
+                    <h2 id="prompt-panel-title">描述画面</h2>
                   </div>
                   <span class="character-count"><span id="prompt-count">0</span> / 32,000</span>
                 </div>
@@ -82,20 +131,26 @@
                   </div>
                 </div>
                 <p class="field-error" id="prompt-error"></p>
-                <div class="style-row" aria-label="风格模板">
+                <div class="style-row" id="prompt-style-row" aria-label="风格模板">
                   <span class="style-label">风格灵感</span>
                   <button class="style-chip" type="button" data-style="电影感摄影，真实光影，细腻质感">电影摄影</button>
                   <button class="style-chip" type="button" data-style="现代商业产品摄影，干净布光，专业棚拍">商业产品</button>
                   <button class="style-chip" type="button" data-style="细腻数字插画，富有表现力的色彩与构图">数字插画</button>
                   <button class="style-chip" type="button" data-style="复古胶片摄影，柔和颗粒，低饱和色调">复古胶片</button>
                 </div>
+                <div class="style-row prompt-template-row hidden" id="prompt-template-row" aria-label="编辑提示模板">
+                  <span class="style-label">快捷模板</span>
+                  <button class="style-chip" type="button" data-template="保留主图的主体和构图，修改">保留主体</button>
+                  <button class="style-chip" type="button" data-template="参考第 2 张图的风格，将主图">参考风格</button>
+                  <button class="style-chip" type="button" data-template="组合这些参考图中的元素，生成">组合元素</button>
+                </div>
               </section>
 
               <section class="panel parameter-panel">
                 <div class="panel-heading">
                   <div>
-                    <span class="section-number">02</span>
-                    <h2>生成参数</h2>
+                    <span class="section-number" id="parameter-section-number">02</span>
+                    <h2 id="parameter-panel-title">生成参数</h2>
                   </div>
                   <button class="ghost-button" id="reset-parameters" type="button">恢复默认</button>
                 </div>
@@ -208,8 +263,8 @@
             <aside class="result-column">
               <div class="result-header">
                 <div>
-                  <span class="section-number">03</span>
-                  <h2>生成结果</h2>
+                  <span class="section-number" id="result-section-number">03</span>
+                  <h2 id="result-panel-title">生成结果</h2>
                 </div>
                 <div class="result-header-actions hidden" id="result-header-actions">
                   <span id="result-meta"></span>
@@ -224,8 +279,8 @@
                     <div class="empty-frame frame-two"></div>
                     <div class="empty-spark">✦</div>
                   </div>
-                  <h3>你的作品将在这里出现</h3>
-                  <p>写下画面描述并选择参数，点击生成后即可在此预览和下载。</p>
+                  <h3 id="empty-result-title">你的作品将在这里出现</h3>
+                  <p id="empty-result-text">写下画面描述并选择参数，点击生成后即可在此预览和下载。</p>
                 </div>
 
                 <div class="progress-result hidden" id="progress-result">
@@ -234,7 +289,7 @@
                     <div class="shimmer"></div>
                     <div class="progress-mark"><span></span><span></span><span></span></div>
                   </div>
-                  <h3>正在构思你的画面</h3>
+                  <h3 id="progress-title">正在构思你的画面</h3>
                   <p>模型正在处理细节，请稍候… <strong id="elapsed-time">00:00</strong></p>
                   <button class="ghost-button danger" id="cancel-button" type="button">取消生成</button>
                 </div>
@@ -391,6 +446,14 @@
                       <span class="switch-control"></span>
                     </button>
                   </div>
+                  <div class="form-field full">
+                    <label>服务能力状态</label>
+                    <div class="capability-status">
+                      <span class="capability-item">图片生成 <strong id="generation-capability" class="cap-unknown">未知</strong></span>
+                      <span class="capability-item">图片编辑 <strong id="edit-capability" class="cap-unknown">未知</strong></span>
+                    </div>
+                    <p class="field-help">按实际请求结果标记，测试连接不会改变状态；“不支持”仅为提示，仍可再次尝试。</p>
+                  </div>
                 </div>
 
                 <aside class="settings-inline-note">
@@ -412,7 +475,12 @@
 
     <div class="image-viewer hidden" id="image-viewer" role="dialog" aria-modal="true" aria-label="图片放大预览">
       <button class="image-viewer-close" id="close-image-viewer-button" type="button" aria-label="关闭图片预览">×</button>
+      <button class="mask-view-toggle hidden" id="image-viewer-mask-toggle" type="button" aria-pressed="false">显示编辑区域</button>
       <img id="image-viewer-image" alt="放大预览" />
+      <div class="result-compare-toggle hidden" id="image-viewer-compare">
+        <button type="button" data-value="result" class="active">结果</button>
+        <button type="button" data-value="original">原图</button>
+      </div>
       <p id="image-viewer-caption"></p>
     </div>
 
@@ -521,10 +589,54 @@
       </aside>
     </div>
 
+    <div class="mask-editor-backdrop hidden" id="mask-editor-overlay">
+      <section class="mask-editor" role="dialog" aria-modal="true" aria-label="编辑区域">
+        <div class="mask-editor-heading">
+          <div>
+            <h2>编辑区域</h2>
+            <p>涂抹希望修改的范围 · 编辑区域仅应用于第 1 张主图</p>
+          </div>
+          <button class="dialog-close-button" id="close-mask-editor-button" type="button" aria-label="关闭编辑区域">×</button>
+        </div>
+        <div class="mask-editor-toolbar">
+          <div class="segmented-control" id="mask-tool-control">
+            <button type="button" data-value="brush" class="active">画笔</button>
+            <button type="button" data-value="eraser">橡皮擦</button>
+          </div>
+          <label class="mask-brush-size">
+            <span>大小</span>
+            <input id="mask-brush-range" type="range" min="10" max="300" value="80" />
+            <strong id="mask-brush-value">80</strong>
+          </label>
+          <div class="mask-editor-actions">
+            <button class="ghost-button" id="mask-undo-button" type="button">撤销</button>
+            <button class="ghost-button" id="mask-redo-button" type="button">重做</button>
+            <button class="ghost-button danger" id="mask-clear-canvas-button" type="button">清空</button>
+          </div>
+          <div class="mask-editor-view">
+            <button class="ghost-button" id="mask-preview-toggle" type="button" aria-pressed="true">叠加预览</button>
+            <button class="ghost-button" id="mask-fit-button" type="button">适合窗口</button>
+            <button class="ghost-button" id="mask-100-button" type="button">100%</button>
+          </div>
+        </div>
+        <div class="mask-editor-stage" id="mask-editor-stage">
+          <canvas id="mask-canvas"></canvas>
+        </div>
+        <div class="mask-editor-footer">
+          <p>模型可能对标记区域边缘做适当调整</p>
+          <div class="mask-editor-confirm">
+            <button class="secondary-button" id="cancel-mask-editor-button" type="button">取消</button>
+            <button class="primary-button compact" id="confirm-mask-button" type="button" disabled>确认区域</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
     <div class="toast-region" id="toast-region" aria-live="polite"></div>
 
     <script src="../shared/validation.js"></script>
     <script src="../shared/presets.js"></script>
+    <script src="../shared/mask-model.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

@@ -14,6 +14,8 @@
   const BACKGROUND_VALUES = new Set(["auto", "opaque", "transparent"]);
   const MODERATION_VALUES = new Set(["auto", "low"]);
   const MAX_PROMPT_LENGTH = 32000;
+  const MAX_EDIT_IMAGES = 16;
+  const MAX_EDIT_IMAGE_BYTES = 50 * 1024 * 1024;
   const MIN_PIXELS = 655360;
   const MAX_PIXELS = 3840 * 2160;
   const EXPERIMENTAL_PIXELS = 2560 * 1440;
@@ -42,7 +44,7 @@
     }
 
     let path = url.pathname.replace(/\/+$/, "");
-    path = path.replace(/\/images\/generations$/i, "");
+    path = path.replace(/\/images\/(?:generations|edits)$/i, "");
     if (url.hostname === "api.openai.com" && (!path || path === "/")) {
       path = "/v1";
     }
@@ -54,6 +56,10 @@
 
   function generationEndpoint(baseUrl) {
     return `${normalizeBaseUrl(baseUrl)}/images/generations`;
+  }
+
+  function editEndpoint(baseUrl) {
+    return `${normalizeBaseUrl(baseUrl)}/images/edits`;
   }
 
   function modelsEndpoint(baseUrl) {
@@ -131,16 +137,7 @@
     return { valid: Object.keys(errors).length === 0, errors };
   }
 
-  function validateGeneration(input) {
-    const errors = {};
-    const warnings = [];
-    const prompt = String(input.prompt || "");
-    const sizeResult = parseSize(input.size);
-
-    if (!prompt.trim()) errors.prompt = "请输入画面描述";
-    if (prompt.length > MAX_PROMPT_LENGTH) {
-      errors.prompt = `提示词不能超过 ${MAX_PROMPT_LENGTH.toLocaleString()} 个字符`;
-    }
+  function validateOutputParams(input, errors, warnings) {
     if (!QUALITY_VALUES.has(input.quality)) errors.quality = "请选择有效质量";
     if (!FORMAT_VALUES.has(input.outputFormat)) errors.outputFormat = "请选择有效格式";
     if (!BACKGROUND_VALUES.has(input.background)) errors.background = "请选择有效背景";
@@ -151,6 +148,7 @@
       errors.n = "生成数量必须是 1 到 10 的整数";
     }
 
+    const sizeResult = parseSize(input.size);
     if (sizeResult.error) {
       errors.size = sizeResult.error;
     } else if (sizeResult.experimental) {
@@ -175,11 +173,46 @@
       }
     }
 
+    return sizeResult;
+  }
+
+  function validatePrompt(prompt, errors, emptyMessage) {
+    const value = String(prompt || "");
+    if (!value.trim()) errors.prompt = emptyMessage;
+    if (value.length > MAX_PROMPT_LENGTH) {
+      errors.prompt = `提示词不能超过 ${MAX_PROMPT_LENGTH.toLocaleString()} 个字符`;
+    }
+  }
+
+  function validateGeneration(input) {
+    const errors = {};
+    const warnings = [];
+    validatePrompt(input.prompt, errors, "请输入画面描述");
+    const size = validateOutputParams(input, errors, warnings);
     return {
       valid: Object.keys(errors).length === 0,
       errors,
       warnings,
-      size: sizeResult,
+      size,
+    };
+  }
+
+  function validateEditInput(input) {
+    const errors = {};
+    const warnings = [];
+    validatePrompt(input.prompt, errors, "请输入编辑要求");
+
+    const imageCount = Number(input.imageCount);
+    if (!Number.isInteger(imageCount) || imageCount < 1 || imageCount > MAX_EDIT_IMAGES) {
+      errors.imageCount = `每次最多添加 ${MAX_EDIT_IMAGES} 张图片，且至少需要 1 张`;
+    }
+
+    const size = validateOutputParams(input, errors, warnings);
+    return {
+      valid: Object.keys(errors).length === 0,
+      errors,
+      warnings,
+      size,
     };
   }
 
@@ -212,15 +245,48 @@
     return payload;
   }
 
+  function buildEditMetadata(input) {
+    const validation = validateEditInput(input);
+    if (!validation.valid) {
+      const error = new Error("编辑参数校验失败");
+      error.details = validation.errors;
+      throw error;
+    }
+
+    // gpt-image-2 固定高保真处理输入图，input_fidelity 从不发送。
+    const metadata = {
+      model: String(input.model || "gpt-image-2").trim(),
+      prompt: String(input.prompt),
+      size: input.size,
+      quality: input.quality,
+      n: Number(input.n),
+      background: input.background,
+      output_format: input.outputFormat,
+      moderation: input.moderation,
+      stream: Boolean(input.stream),
+    };
+    if (["jpeg", "webp"].includes(input.outputFormat)) {
+      metadata.output_compression = Number(input.outputCompression);
+    }
+    if (input.stream) {
+      metadata.partial_images = Number(input.partialImages);
+    }
+    return metadata;
+  }
+
   return {
     BACKGROUND_VALUES,
     FORMAT_VALUES,
+    MAX_EDIT_IMAGES,
+    MAX_EDIT_IMAGE_BYTES,
     MAX_PROMPT_LENGTH,
     MIN_PIXELS,
     MODERATION_VALUES,
     QUALITY_VALUES,
     SIZE_PRESETS,
+    buildEditMetadata,
     buildGenerationPayload,
+    editEndpoint,
     findSizePreset,
     generationEndpoint,
     modelsEndpoint,
@@ -228,6 +294,7 @@
     parseSize,
     resolvePresetSize,
     validateConnection,
+    validateEditInput,
     validateGeneration,
   };
 });

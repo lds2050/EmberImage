@@ -10,6 +10,7 @@ const { pathToFileURL } = require("node:url");
 const { AppStorage, DEFAULT_PROFILE } = require("./storage.cjs");
 const { decryptSecret, decryptSecretForDevice, encryptSecretForDevice, maskSecret } = require("./secure-store.cjs");
 const Validation = require("../shared/validation.js");
+const { buildEditFormData } = require("../shared/edit-form.js");
 
 let mainWindow;
 let storage;
@@ -17,6 +18,12 @@ let deviceEncryptionKey;
 const sessionApiKeys = new Map();
 const autoUnlockFailures = new Set();
 const generationControllers = new Map();
+const assetRegistry = new Map();
+let activeRequestTaskId = null;
+let testTimeoutOverrideMs = null;
+
+const EDIT_IMAGE_EXTENSIONS = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };
+const EDIT_MIME_EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
 
 // Keep the V0.1 data directory after the visible product rename so existing
 // connections, encrypted keys, history, logs, and generated files migrate in place.
@@ -84,6 +91,8 @@ function publicProfile(profile) {
     needsLegacyUnlock: profile.encryptedKey?.version === 1,
     autoUnlockFailed: autoUnlockFailures.has(profile.id),
     maskedKey: maskSecret(apiKey),
+    generationCapability: profile.generationCapability || "unknown",
+    editCapability: profile.editCapability || "unknown",
   };
 }
 
@@ -403,7 +412,13 @@ function timestampName(date = new Date()) {
 }
 
 function hydrateEntry(entry) {
-  return { ...entry, favorite: Boolean(entry.favorite), images: (entry.images || []).map((image) => ({ ...image, previewUrl: pathToFileURL(image.path).toString() })) };
+  return {
+    ...entry,
+    favorite: Boolean(entry.favorite),
+    images: (entry.images || []).map((image) => ({ ...image, previewUrl: pathToFileURL(image.path).toString() })),
+    inputs: (entry.inputs || []).map((input) => ({ ...input, thumbnailUrl: input.thumbnailPath ? pathToFileURL(input.thumbnailPath).toString() : "", previewUrl: input.storedPath ? pathToFileURL(input.storedPath).toString() : "" })),
+    mask: entry.mask ? { ...entry.mask, thumbnailUrl: entry.mask.thumbnailPath ? pathToFileURL(entry.mask.thumbnailPath).toString() : "", previewUrl: entry.mask.storedPath ? pathToFileURL(entry.mask.storedPath).toString() : "" } : null,
+  };
 }
 
 function parseSseBlock(block) {
@@ -459,86 +474,402 @@ async function readStreamingImages(response, taskId, sender, outputFormat) {
 
 async function createGeneration(request, sender) {
   const taskId = safeTaskId(request.taskId);
+  if (activeRequestTaskId) throw new AppError("已有图片任务正在进行，请等待完成或取消", { code: "busy" });
   if (generationControllers.has(taskId)) throw new AppError("该任务已在生成中", { code: "duplicate_task" });
-  const config = await loadRuntimeConfig();
-  const profile = getProfile(config);
-  const apiKey = sessionApiKeys.get(profile.id) || "";
-  if (!apiKey) throw new AppError("请先输入 API Key，或完成旧版密钥迁移", { code: "missing_api_key" });
-
-  const baseUrl = assertSecureBaseUrl(profile.baseUrl);
-  const payload = Validation.buildGenerationPayload({ ...request.parameters, model: profile.model });
-  const endpoint = Validation.generationEndpoint(baseUrl);
-  const controllerRecord = { controller: new AbortController(), reason: "cancelled" };
-  generationControllers.set(taskId, controllerRecord);
-  const startedAt = Date.now();
-  const timeout = setTimeout(() => {
-    controllerRecord.reason = "timeout";
-    controllerRecord.controller.abort();
-  }, validateTimeout(profile.requestTimeoutSeconds) * 1000);
-  let responseStatus = null;
-  let requestId = "";
-
+  activeRequestTaskId = taskId;
   try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: payload.stream ? "text/event-stream" : "application/json" },
-      body: JSON.stringify(payload),
-      signal: controllerRecord.controller.signal,
-    });
-    responseStatus = response.status;
-    requestId = getRequestId(response);
-    if (!response.ok) throw apiErrorFromResponse(response, await readResponseBody(response));
-    const contentType = response.headers.get("content-type") || "";
-    const body = payload.stream && contentType.includes("text/event-stream") ? await readStreamingImages(response, taskId, sender, payload.output_format) : await readResponseBody(response);
-    if (!Array.isArray(body.data) || !body.data.length) throw new AppError("响应中没有可用的图片数据", { code: "invalid_response", requestId });
+    const config = await loadRuntimeConfig();
+    const profile = getProfile(config);
+    const apiKey = sessionApiKeys.get(profile.id) || "";
+    if (!apiKey) throw new AppError("请先输入 API Key，或完成旧版密钥迁移", { code: "missing_api_key" });
 
-    const createdAt = new Date();
-    const images = [];
-    for (let index = 0; index < body.data.length; index += 1) {
-      const item = body.data[index];
-      let bytes;
-      if (item?.b64_json) bytes = Buffer.from(item.b64_json, "base64");
-      else if (item?.url) bytes = await downloadCompatibleImage(item.url, controllerRecord.controller.signal);
-      else throw new AppError(`第 ${index + 1} 张结果缺少 b64_json 或 url`, { code: "invalid_response" });
-      if (!bytes.length) throw new AppError("API 返回了空图片", { code: "decode_error" });
-      const format = detectImageFormat(bytes, payload.output_format);
-      const filename = `${timestampName(createdAt)}_${taskId.slice(-8)}_${index + 1}.${format === "jpeg" ? "jpg" : format}`;
-      const filePath = await storage.writeResult(filename, bytes);
-      images.push({ id: `${taskId}-${index}`, path: filePath, filename, format, mime: mimeForFormat(format), bytes: bytes.length });
-    }
+    const baseUrl = assertSecureBaseUrl(profile.baseUrl);
+    const payload = Validation.buildGenerationPayload({ ...request.parameters, model: profile.model });
+    const endpoint = Validation.generationEndpoint(baseUrl);
+    const controllerRecord = { controller: new AbortController(), reason: "cancelled" };
+    generationControllers.set(taskId, controllerRecord);
+    const startedAt = Date.now();
+    let timeout = null;
+    let responseStatus = null;
+    let requestId = "";
 
-    const entry = {
-      id: taskId,
-      createdAt: createdAt.toISOString(),
-      durationMs: Date.now() - startedAt,
-      prompt: payload.prompt,
-      model: payload.model,
-      connectionId: profile.id,
-      connectionName: profile.name,
-      providerHost: new URL(baseUrl).host,
-      favorite: false,
-      parameters: { size: payload.size, quality: payload.quality, n: payload.n, background: payload.background, outputFormat: payload.output_format, outputCompression: payload.output_compression ?? null, moderation: payload.moderation, stream: payload.stream },
-      requestId,
-      usage: body.usage || null,
-      images,
-    };
-    await storage.addHistory(entry);
-    await addLog({ ...logBase(profile, "image_generation", endpoint), status: "success", httpStatus: responseStatus, durationMs: entry.durationMs, requestId, request: requestDetails(profile, endpoint, "POST", payload), response: { imageCount: images.length, usage: body.usage || null }, imageCount: images.length });
-    return hydrateEntry(entry);
-  } catch (error) {
-    let nextError = error;
-    if (error.name === "AbortError") {
-      nextError = controllerRecord.reason === "timeout"
-        ? new AppError(`请求超过 ${profile.requestTimeoutSeconds} 秒，已停止等待`, { code: "timeout" })
-        : new AppError("已取消本次生成", { code: "cancelled" });
-      nextError.name = "AbortError";
-      nextError.code = controllerRecord.reason;
+    try {
+      timeout = setTimeout(() => {
+        controllerRecord.reason = "timeout";
+        controllerRecord.controller.abort();
+      }, validateTimeout(profile.requestTimeoutSeconds) * 1000);
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: payload.stream ? "text/event-stream" : "application/json" },
+        body: JSON.stringify(payload),
+        signal: controllerRecord.controller.signal,
+      });
+      responseStatus = response.status;
+      requestId = getRequestId(response);
+      if (!response.ok) throw apiErrorFromResponse(response, await readResponseBody(response));
+      const contentType = response.headers.get("content-type") || "";
+      const body = payload.stream && contentType.includes("text/event-stream") ? await readStreamingImages(response, taskId, sender, payload.output_format) : await readResponseBody(response);
+      if (!Array.isArray(body.data) || !body.data.length) throw new AppError("响应中没有可用的图片数据", { code: "invalid_response", requestId });
+
+      const createdAt = new Date();
+      const images = [];
+      for (let index = 0; index < body.data.length; index += 1) {
+        const item = body.data[index];
+        let bytes;
+        if (item?.b64_json) bytes = Buffer.from(item.b64_json, "base64");
+        else if (item?.url) bytes = await downloadCompatibleImage(item.url, controllerRecord.controller.signal);
+        else throw new AppError(`第 ${index + 1} 张结果缺少 b64_json 或 url`, { code: "invalid_response" });
+        if (!bytes.length) throw new AppError("API 返回了空图片", { code: "decode_error" });
+        const format = detectImageFormat(bytes, payload.output_format);
+        const filename = `${timestampName(createdAt)}_${taskId.slice(-8)}_${index + 1}.${format === "jpeg" ? "jpg" : format}`;
+        const filePath = await storage.writeResult(filename, bytes);
+        images.push({ id: `${taskId}-${index}`, path: filePath, filename, format, mime: mimeForFormat(format), bytes: bytes.length });
+      }
+
+      const entry = {
+        id: taskId,
+        createdAt: createdAt.toISOString(),
+        durationMs: Date.now() - startedAt,
+        prompt: payload.prompt,
+        model: payload.model,
+        connectionId: profile.id,
+        connectionName: profile.name,
+        providerHost: new URL(baseUrl).host,
+        favorite: false,
+        parameters: { size: payload.size, quality: payload.quality, n: payload.n, background: payload.background, outputFormat: payload.output_format, outputCompression: payload.output_compression ?? null, moderation: payload.moderation, stream: payload.stream },
+        requestId,
+        usage: body.usage || null,
+        images,
+      };
+      await storage.addHistory(entry);
+      await addLog({ ...logBase(profile, "image_generation", endpoint), status: "success", httpStatus: responseStatus, durationMs: entry.durationMs, requestId, request: requestDetails(profile, endpoint, "POST", payload), response: { imageCount: images.length, usage: body.usage || null }, imageCount: images.length });
+      await setConnectionCapability(profile.id, "generationCapability", "supported");
+      return hydrateEntry(entry);
+    } catch (error) {
+      let nextError = error;
+      if (error.name === "AbortError") {
+        nextError = controllerRecord.reason === "timeout"
+          ? new AppError(`请求超过 ${profile.requestTimeoutSeconds} 秒，已停止等待`, { code: "timeout" })
+          : new AppError("已取消本次生成", { code: "cancelled" });
+        nextError.name = "AbortError";
+        nextError.code = controllerRecord.reason;
+      }
+      await addLog({ ...logBase(profile, "image_generation", endpoint), status: nextError.code === "cancelled" ? "cancelled" : "error", httpStatus: nextError.status || responseStatus, durationMs: Date.now() - startedAt, requestId: nextError.requestId || requestId, request: requestDetails(profile, endpoint, "POST", payload), responseBody: nextError.detail || null, errorCode: nextError.code || "network_error", errorMessage: nextError.message });
+      throw nextError;
+    } finally {
+      clearTimeout(timeout);
+      generationControllers.delete(taskId);
     }
-    await addLog({ ...logBase(profile, "image_generation", endpoint), status: nextError.code === "cancelled" ? "cancelled" : "error", httpStatus: nextError.status || responseStatus, durationMs: Date.now() - startedAt, requestId: nextError.requestId || requestId, request: requestDetails(profile, endpoint, "POST", payload), responseBody: nextError.detail || null, errorCode: nextError.code || "network_error", errorMessage: nextError.message });
-    throw nextError;
   } finally {
-    clearTimeout(timeout);
-    generationControllers.delete(taskId);
+    activeRequestTaskId = null;
+  }
+}
+
+async function setConnectionCapability(profileId, key, value) {
+  try {
+    const config = await storage.loadConfig();
+    const profile = config.connections.find((item) => item.id === profileId);
+    if (!profile || profile[key] === value) return;
+    profile[key] = value;
+    await storage.saveConfig(config);
+  } catch { /* Capability hints must never break a request. */ }
+}
+
+function publicAsset(asset) {
+  return {
+    id: asset.id,
+    fileName: asset.fileName,
+    mime: asset.mime,
+    width: asset.width,
+    height: asset.height,
+    bytes: asset.bytes,
+    thumbnailUrl: pathToFileURL(asset.thumbnailPath).toString(),
+    originalUrl: pathToFileURL(asset.filePath).toString(),
+  };
+}
+
+async function registerAsset(filePath, bytes, fileName, mime, ownsFile) {
+  const image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) throw new AppError("无法读取此图片，文件可能已损坏", { code: "decode_error" });
+  const size = image.getSize();
+  const id = crypto.randomUUID();
+  const longest = Math.max(size.width, size.height);
+  const scaled = longest > 640 ? image.resize({ width: Math.max(1, Math.round((size.width * 640) / longest)) }) : image;
+  const thumbnailPath = await storage.writeThumbnail(`${id}.jpg`, scaled.toJPEG(80));
+  const asset = { id, filePath, fileName, mime, width: size.width, height: size.height, bytes: bytes.length, thumbnailPath, ownsFile };
+  assetRegistry.set(id, asset);
+  return publicAsset(asset);
+}
+
+async function importAssetFromPath(filePath) {
+  const target = path.resolve(String(filePath));
+  const mime = EDIT_IMAGE_EXTENSIONS[path.extname(target).toLowerCase()];
+  if (!mime) throw new AppError("仅支持 PNG、JPEG 和 WebP", { code: "unsupported_format" });
+  const stat = await fs.stat(target);
+  if (stat.size > Validation.MAX_EDIT_IMAGE_BYTES) throw new AppError("图片超过 50 MB，请压缩后重试", { code: "file_too_large" });
+  const bytes = await fs.readFile(target);
+  return registerAsset(target, bytes, path.basename(target), mime, false);
+}
+
+async function importAssetFromBuffer(buffer, fileName) {
+  const bytes = Buffer.from(buffer);
+  if (!bytes.length) throw new AppError("无法读取此图片，文件可能已损坏", { code: "decode_error" });
+  if (bytes.length > Validation.MAX_EDIT_IMAGE_BYTES) throw new AppError("图片超过 50 MB，请压缩后重试", { code: "file_too_large" });
+  const format = detectImageFormat(bytes, "");
+  if (!format) throw new AppError("仅支持 PNG、JPEG 和 WebP", { code: "unsupported_format" });
+  const mime = mimeForFormat(format);
+  const id = crypto.randomUUID();
+  const stagingDir = path.join(storage.tmpDirectory, "assets");
+  await fs.mkdir(stagingDir, { recursive: true, mode: 0o700 });
+  const stagingPath = path.join(stagingDir, `${id}.${EDIT_MIME_EXT[mime]}`);
+  await fs.writeFile(stagingPath, bytes, { mode: 0o600 });
+  const name = fileName ? String(fileName) : `pasted-${id.slice(0, 8)}.${EDIT_MIME_EXT[mime]}`;
+  return registerAsset(stagingPath, bytes, name, mime, true);
+}
+
+async function importAssets(payload) {
+  const filePaths = Array.isArray(payload?.filePaths) ? payload.filePaths : [];
+  const imported = [];
+  const errors = [];
+  for (const filePath of filePaths) {
+    try { imported.push(await importAssetFromPath(filePath)); }
+    catch (error) { errors.push({ filePath, message: error.message }); }
+  }
+  return { assets: imported, errors };
+}
+
+async function importBuffer(payload) {
+  return importAssetFromBuffer(payload?.buffer, payload?.fileName);
+}
+
+async function removeAsset(payload) {
+  const asset = assetRegistry.get(String(payload?.id));
+  if (!asset) return { removed: false };
+  assetRegistry.delete(asset.id);
+  if (asset.ownsFile) await fs.rm(asset.filePath, { force: true }).catch(() => {});
+  await fs.rm(asset.thumbnailPath, { force: true }).catch(() => {});
+  return { removed: true };
+}
+
+async function pickImages() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: "选择图片",
+    buttonLabel: "添加",
+    properties: ["openFile", "multiSelections"],
+    filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }],
+  });
+  if (result.canceled || !result.filePaths.length) return { canceled: true, filePaths: [] };
+  return { canceled: false, filePaths: result.filePaths };
+}
+
+async function saveMask(payload) {
+  const baseAsset = assetRegistry.get(String(payload?.baseAssetId || ""));
+  if (!baseAsset) throw new AppError("主图不存在或已被移除", { code: "invalid_asset" });
+  const bytes = Buffer.from(payload?.buffer || new Uint8Array());
+  if (!bytes.length) throw new AppError("编辑区域处理失败，请重新绘制", { code: "mask_conversion_failed" });
+  if (detectImageFormat(bytes, "") !== "png") throw new AppError("编辑区域必须是 PNG", { code: "mask_conversion_failed" });
+  const image = nativeImage.createFromBuffer(bytes);
+  if (image.isEmpty()) throw new AppError("编辑区域处理失败，请重新绘制", { code: "mask_conversion_failed" });
+  const size = image.getSize();
+  if (size.width !== baseAsset.width || size.height !== baseAsset.height) {
+    throw new AppError("编辑区域与主图尺寸不一致，请重新绘制", { code: "mask_size_mismatch" });
+  }
+  const id = crypto.randomUUID();
+  const stagingDir = path.join(storage.tmpDirectory, "assets");
+  await fs.mkdir(stagingDir, { recursive: true, mode: 0o700 });
+  const stagingPath = path.join(stagingDir, `${id}.png`);
+  await fs.writeFile(stagingPath, bytes, { mode: 0o600 });
+  const maskAsset = await registerAsset(stagingPath, bytes, `mask-${id.slice(0, 8)}.png`, "image/png", true);
+  return { maskAsset };
+}
+
+function editRequestDetails(profile, endpoint, metadata, inputs, mask) {
+  return {
+    method: "POST",
+    endpoint,
+    headers: {
+      Accept: metadata.stream ? "text/event-stream" : "application/json",
+      "Content-Type": "multipart/form-data",
+      Authorization: "Bearer [已隐藏]",
+    },
+    timeoutSeconds: profile.requestTimeoutSeconds,
+    inputs,
+    mask,
+    parameters: metadata,
+  };
+}
+
+async function createEdit(request, sender) {
+  const taskId = safeTaskId(request.taskId);
+  if (activeRequestTaskId) throw new AppError("已有图片任务正在进行，请等待完成或取消", { code: "busy" });
+  if (generationControllers.has(taskId)) throw new AppError("该任务已在生成中", { code: "duplicate_task" });
+  activeRequestTaskId = taskId;
+  try {
+    const assetIds = Array.isArray(request.assetIds) ? request.assetIds.map(String) : [];
+    const assets = [];
+    for (const id of assetIds) {
+      const asset = assetRegistry.get(id);
+      if (!asset) throw new AppError("素材不存在或已被移除", { code: "invalid_asset" });
+      assets.push(asset);
+    }
+    if (!assets.length) throw new AppError("请至少添加一张图片", { code: "invalid_asset" });
+    if (assets.length > Validation.MAX_EDIT_IMAGES) throw new AppError(`每次最多添加 ${Validation.MAX_EDIT_IMAGES} 张图片`, { code: "too_many_images" });
+    const maskAsset = request.maskAssetId ? assetRegistry.get(String(request.maskAssetId)) : null;
+    if (maskAsset && assets.length && (maskAsset.width !== assets[0].width || maskAsset.height !== assets[0].height)) {
+      throw new AppError("编辑区域与主图尺寸不一致，请重新绘制", { code: "mask_size_mismatch" });
+    }
+
+    const config = await loadRuntimeConfig();
+    const profile = getProfile(config);
+    const apiKey = sessionApiKeys.get(profile.id) || "";
+    if (!apiKey) throw new AppError("请先输入 API Key，或完成旧版密钥迁移", { code: "missing_api_key" });
+
+    const baseUrl = assertSecureBaseUrl(profile.baseUrl);
+    const metadata = Validation.buildEditMetadata({ ...request.parameters, model: profile.model, imageCount: assets.length });
+    const endpoint = Validation.editEndpoint(baseUrl);
+
+    const controllerRecord = { controller: new AbortController(), reason: "cancelled" };
+    generationControllers.set(taskId, controllerRecord);
+    const startedAt = Date.now();
+    let timeout = null;
+    let responseStatus = null;
+    let requestId = "";
+    let copiedInputs = [];
+    let maskName = null;
+    let logInputs = [];
+    let logMask = null;
+
+    try {
+      timeout = setTimeout(() => {
+        controllerRecord.reason = "timeout";
+        controllerRecord.controller.abort();
+      }, testTimeoutOverrideMs ?? validateTimeout(profile.requestTimeoutSeconds) * 1000);
+      await storage.createTaskTempDir(taskId);
+      const tempDir = path.join(storage.tmpDirectory, storage._safeSegment(taskId));
+      for (let index = 0; index < assets.length; index += 1) {
+        let name = `input-${index}.${EDIT_MIME_EXT[assets[index].mime] || "png"}`;
+        let descriptor = assets[index];
+        if (index === 0 && maskAsset && assets[0].mime !== "image/png") {
+          // API 要求 Mask 与主图同尺寸同格式：发送前把非 PNG 主图无损转为 PNG。
+          const baseImage = nativeImage.createFromPath(assets[0].filePath);
+          if (baseImage.isEmpty()) throw new AppError("无法解码主图", { code: "decode_error" });
+          const converted = baseImage.toPNG();
+          name = "input-0.png";
+          await fs.writeFile(path.join(tempDir, name), converted, { mode: 0o600 });
+          descriptor = { ...assets[0], mime: "image/png", bytes: converted.length };
+        } else {
+          await fs.copyFile(assets[index].filePath, path.join(tempDir, name));
+        }
+        copiedInputs.push({ name, asset: descriptor });
+      }
+      if (maskAsset) {
+        maskName = `mask.${EDIT_MIME_EXT[maskAsset.mime] || "png"}`;
+        await fs.copyFile(maskAsset.filePath, path.join(tempDir, maskName));
+      }
+      logInputs = copiedInputs.map((copied, index) => ({
+        index: index + 1,
+        role: index === 0 ? "base" : "reference",
+        mime: copied.asset.mime,
+        width: copied.asset.width,
+        height: copied.asset.height,
+        bytes: copied.asset.bytes,
+        name: `image-${index + 1}.${EDIT_MIME_EXT[copied.asset.mime] || "png"}`,
+      }));
+      logMask = maskAsset ? { width: maskAsset.width, height: maskAsset.height, bytes: maskAsset.bytes } : null;
+
+      const inputFiles = [];
+      for (let index = 0; index < copiedInputs.length; index += 1) {
+        const buffer = await fs.readFile(path.join(tempDir, copiedInputs[index].name));
+        inputFiles.push({ buffer, name: `image-${index + 1}.${EDIT_MIME_EXT[copiedInputs[index].asset.mime] || "png"}`, mime: copiedInputs[index].asset.mime });
+      }
+      const maskFile = maskName ? { buffer: await fs.readFile(path.join(tempDir, maskName)), name: "mask.png", mime: maskAsset.mime } : null;
+      const form = buildEditFormData(metadata, inputFiles, maskFile);
+
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, Accept: metadata.stream ? "text/event-stream" : "application/json" },
+        body: form,
+        signal: controllerRecord.controller.signal,
+      });
+      responseStatus = response.status;
+      requestId = getRequestId(response);
+      if (!response.ok) throw apiErrorFromResponse(response, await readResponseBody(response));
+      const contentType = response.headers.get("content-type") || "";
+      const body = metadata.stream && contentType.includes("text/event-stream") ? await readStreamingImages(response, taskId, sender, metadata.output_format) : await readResponseBody(response);
+      if (!Array.isArray(body.data) || !body.data.length) throw new AppError("响应中没有可用的图片数据", { code: "invalid_response", requestId });
+
+      const createdAt = new Date();
+      const images = [];
+      for (let index = 0; index < body.data.length; index += 1) {
+        const item = body.data[index];
+        let bytes;
+        if (item?.b64_json) bytes = Buffer.from(item.b64_json, "base64");
+        else if (item?.url) bytes = await downloadCompatibleImage(item.url, controllerRecord.controller.signal);
+        else throw new AppError(`第 ${index + 1} 张结果缺少 b64_json 或 url`, { code: "invalid_response" });
+        if (!bytes.length) throw new AppError("API 返回了空图片", { code: "decode_error" });
+        const format = detectImageFormat(bytes, metadata.output_format);
+        const filename = `${timestampName(createdAt)}_${taskId.slice(-8)}_${index + 1}.${format === "jpeg" ? "jpg" : format}`;
+        const filePath = await storage.writeResult(filename, bytes);
+        images.push({ id: `${taskId}-${index}`, path: filePath, filename, format, mime: mimeForFormat(format), bytes: bytes.length });
+      }
+
+      const mediaDir = await storage.promoteTaskMedia(taskId, taskId);
+      const inputs = copiedInputs.map((copied, index) => ({
+        id: `${taskId}-input-${index}`,
+        role: index === 0 ? "base" : "reference",
+        storedPath: path.join(mediaDir, copied.name),
+        thumbnailPath: copied.asset.thumbnailPath,
+        mimeType: copied.asset.mime,
+        width: copied.asset.width,
+        height: copied.asset.height,
+        bytes: copied.asset.bytes,
+      }));
+      const maskRecord = maskName ? { storedPath: path.join(mediaDir, maskName), thumbnailPath: maskAsset.thumbnailPath, width: maskAsset.width, height: maskAsset.height, bytes: maskAsset.bytes } : null;
+
+      const entry = {
+        id: taskId,
+        operation: "edit",
+        editMode: maskAsset ? "mask" : "full",
+        createdAt: createdAt.toISOString(),
+        durationMs: Date.now() - startedAt,
+        prompt: metadata.prompt,
+        model: metadata.model,
+        connectionId: profile.id,
+        connectionName: profile.name,
+        providerHost: new URL(baseUrl).host,
+        favorite: false,
+        inputs,
+        mask: maskRecord,
+        parameters: { size: metadata.size, quality: metadata.quality, n: metadata.n, background: metadata.background, outputFormat: metadata.output_format, outputCompression: metadata.output_compression ?? null, moderation: metadata.moderation, stream: metadata.stream },
+        requestId,
+        usage: body.usage || null,
+        images,
+      };
+      await storage.addHistory(entry);
+      await addLog({ ...logBase(profile, "image_edit", endpoint), status: "success", httpStatus: responseStatus, durationMs: entry.durationMs, requestId, request: editRequestDetails(profile, endpoint, metadata, logInputs, logMask), response: { imageCount: images.length, usage: body.usage || null }, imageCount: images.length });
+      await setConnectionCapability(profile.id, "editCapability", "supported");
+      return hydrateEntry(entry);
+    } catch (error) {
+      let nextError = error;
+      if (error.name === "AbortError") {
+        nextError = controllerRecord.reason === "timeout"
+          ? new AppError(`请求超过 ${profile.requestTimeoutSeconds} 秒，已停止等待`, { code: "timeout" })
+          : new AppError("已取消本次编辑", { code: "cancelled" });
+        nextError.name = "AbortError";
+        nextError.code = controllerRecord.reason;
+      }
+      if (responseStatus === 404 || responseStatus === 405) {
+        await setConnectionCapability(profile.id, "editCapability", "unsupported");
+      }
+      await storage.cleanTaskTempDir(taskId).catch(() => {});
+      await addLog({ ...logBase(profile, "image_edit", endpoint), status: nextError.code === "cancelled" ? "cancelled" : "error", httpStatus: nextError.status || responseStatus, durationMs: Date.now() - startedAt, requestId: nextError.requestId || requestId, request: editRequestDetails(profile, endpoint, metadata, logInputs, logMask), responseBody: nextError.detail || null, errorCode: nextError.code || "network_error", errorMessage: nextError.message });
+      throw nextError;
+    } finally {
+      clearTimeout(timeout);
+      generationControllers.delete(taskId);
+    }
+  } finally {
+    activeRequestTaskId = null;
   }
 }
 
@@ -597,8 +928,16 @@ async function deleteHistoryEntry(id) {
     try { await shell.trashItem(assertResultPath(image.path)); }
     catch { /* File may already be gone. */ }
   }
+  const mediaDir = path.join(storage.historyMediaDirectory, storage._safeSegment(entry.id));
+  try { await fs.access(mediaDir); await shell.trashItem(mediaDir); }
+  catch { /* No edit media to remove. */ }
   await storage.removeHistory(id);
   return { deleted: true };
+}
+
+function cancelTask(taskId) {
+  const record = generationControllers.get(String(taskId));
+  if (record) { record.reason = "cancelled"; record.controller.abort(); }
 }
 
 function registerIpcHandlers() {
@@ -612,10 +951,17 @@ function registerIpcHandlers() {
     try { return { ok: true, data: await createGeneration(payload, event.sender) }; }
     catch (error) { return { ok: false, error: presentError(error) }; }
   });
-  ipcMain.on("generation:cancel", (_event, taskId) => {
-    const record = generationControllers.get(String(taskId));
-    if (record) { record.reason = "cancelled"; record.controller.abort(); }
+  ipcMain.on("generation:cancel", (_event, taskId) => cancelTask(taskId));
+  ipcMain.handle("edit:pick-images", withResult(pickImages));
+  ipcMain.handle("edit:import-assets", withResult(importAssets));
+  ipcMain.handle("edit:import-buffer", withResult(importBuffer));
+  ipcMain.handle("edit:remove-asset", withResult(removeAsset));
+  ipcMain.handle("edit:save-mask", withResult(saveMask));
+  ipcMain.handle("edit:create", async (event, payload) => {
+    try { return { ok: true, data: await createEdit(payload, event.sender) }; }
+    catch (error) { return { ok: false, error: presentError(error) }; }
   });
+  ipcMain.on("edit:cancel", (_event, taskId) => cancelTask(taskId));
   ipcMain.handle("history:list", withResult(async () => (await storage.listHistory()).map(hydrateEntry)));
   ipcMain.handle("history:favorite", withResult(async (payload) => {
     const entry = await storage.updateHistory(String(payload.id), { favorite: Boolean(payload.favorite) });
@@ -657,3 +1003,17 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
+
+// Test-only hook: Electron loads this file as the entry point and ignores exports.
+module.exports = {
+  __testing: {
+    createEdit,
+    saveMask,
+    cancelTask,
+    setStorage: (value) => { storage = value; },
+    setTimeoutOverrideMs: (value) => { testTimeoutOverrideMs = value; },
+    getActiveRequestTaskId: () => activeRequestTaskId,
+    sessionApiKeys,
+    assetRegistry,
+  },
+};

@@ -11,6 +11,13 @@ contextBridge.exposeInMainWorld("imageStudio", {
   testConnection: (connection) => ipcRenderer.invoke("connection:test", connection),
   generate: (request) => ipcRenderer.invoke("generation:create", request),
   cancelGeneration: (taskId) => ipcRenderer.send("generation:cancel", taskId),
+  pickImages: () => ipcRenderer.invoke("edit:pick-images"),
+  importAssets: (filePaths) => ipcRenderer.invoke("edit:import-assets", { filePaths }),
+  importBuffer: (buffer, fileName) => ipcRenderer.invoke("edit:import-buffer", { buffer, fileName }),
+  removeAsset: (id) => ipcRenderer.invoke("edit:remove-asset", { id }),
+  saveMask: (buffer, baseAssetId) => ipcRenderer.invoke("edit:save-mask", { buffer, baseAssetId }),
+  edit: (request) => ipcRenderer.invoke("edit:create", request),
+  cancelEdit: (taskId) => ipcRenderer.send("edit:cancel", taskId),
   onGenerationPartial: (callback) => {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on("generation:partial", listener);
