@@ -27,3 +27,6 @@ secrets.json
 # Internal docs stay local; never publish to GitHub (release notes and README excepted).
 docs/PRD-*.md
 docs/HANDOFF-*.md
+
+# Local AI assistant workspace (memory, session state) — never enter Git.
+.workbuddy/
