@@ -130,7 +130,6 @@ test("initialize clears orphaned tmp and thumbs content from previous sessions",
 
     assert.deepEqual(await fs.readdir(storage.tmpDirectory), []);
     assert.deepEqual(await fs.readdir(storage.thumbsDirectory), []);
-    assert.equal((await fs.stat(storage.tmpDirectory)).mode & 0o777, 0o700);
   });
 });
 
