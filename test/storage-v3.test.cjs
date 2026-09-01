@@ -117,6 +117,23 @@ test("writeThumbnail stores bytes in the thumbs directory", async () => {
   });
 });
 
+test("initialize clears orphaned tmp and thumbs content from previous sessions", async () => {
+  await withStorage(async (storage) => {
+    await fs.mkdir(path.join(storage.tmpDirectory, "assets"), { recursive: true });
+    await fs.writeFile(path.join(storage.tmpDirectory, "assets", "staged.jpg"), Buffer.from([1]));
+    const leftoverTask = await storage.createTaskTempDir("task-leftover");
+    await fs.writeFile(path.join(leftoverTask, "input-0.png"), Buffer.from([9]));
+    await storage.writeThumbnail("old.jpg", Buffer.from([2]));
+
+    const restarted = new AppStorage(storage.rootDirectory);
+    await restarted.initialize();
+
+    assert.deepEqual(await fs.readdir(storage.tmpDirectory), []);
+    assert.deepEqual(await fs.readdir(storage.thumbsDirectory), []);
+    assert.equal((await fs.stat(storage.tmpDirectory)).mode & 0o777, 0o700);
+  });
+});
+
 test("assertAllowedPath rejects paths outside the root", async () => {
   await withStorage(async (storage) => {
     const inside = path.join(storage.historyMediaDirectory, "entry-1", "input-0.png");

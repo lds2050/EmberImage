@@ -29,7 +29,7 @@
     creationMode: "generate",
     editAssets: [],
     editScope: "full",
-    mask: { maskAssetId: null, baseAssetId: null, strokes: [], asset: null },
+    mask: { maskAssetId: null, baseAssetId: null, strokes: [], inverted: false, asset: null },
     isEditing: false,
     isImportingAssets: false,
     activeOperation: null,
@@ -660,7 +660,7 @@
 
   async function discardMask() {
     const id = state.mask.maskAssetId;
-    state.mask = { maskAssetId: null, baseAssetId: null, strokes: [], asset: null };
+    state.mask = { maskAssetId: null, baseAssetId: null, strokes: [], inverted: false, asset: null };
     renderMaskStatus();
     updateGenerationState();
     if (id) await api.removeAsset(id).catch(() => {});
@@ -671,6 +671,12 @@
     return window.confirm("更换主图将清除已标记的编辑区域，是否继续？");
   }
 
+  let dragAssetIndex = null;
+
+  function clearAssetDropIndicators() {
+    $$("#asset-grid .asset-card").forEach((card) => card.classList.remove("drop-before", "drop-after"));
+  }
+
   function renderAssets() {
     const grid = $("#asset-grid");
     grid.innerHTML = "";
@@ -678,21 +684,49 @@
       const card = document.createElement("article");
       card.className = `asset-card${index === 0 ? " main" : ""}`;
       card.dataset.assetId = asset.id;
+      card.draggable = true;
       card.innerHTML = `
         <img src="${escapeHtml(asset.thumbnailUrl)}" alt="${escapeHtml(asset.fileName)}" />
         <span class="asset-role">${index === 0 ? "主图" : `参考 ${index + 1}`}</span>
         <div class="asset-card-info"><strong>${escapeHtml(asset.fileName)}</strong><small>${asset.width}×${asset.height} · ${formatBytes(asset.bytes)}</small></div>
         <div class="asset-card-actions">
-          <button type="button" data-action="move-left" aria-label="向前移动">←</button>
-          <button type="button" data-action="move-right" aria-label="向后移动">→</button>
           <button type="button" class="danger" data-action="remove" aria-label="移除">✕</button>
         </div>`;
-      card.querySelector('[data-action="move-left"]').disabled = index === 0;
-      card.querySelector('[data-action="move-right"]').disabled = index === state.editAssets.length - 1;
-      card.querySelector('[data-action="move-left"]').addEventListener("click", () => moveAsset(index, -1));
-      card.querySelector('[data-action="move-right"]').addEventListener("click", () => moveAsset(index, 1));
       card.querySelector('[data-action="remove"]').addEventListener("click", () => removeAssetAt(index));
       card.querySelector("img").addEventListener("dblclick", () => openImageViewer(asset.originalUrl, asset.fileName));
+      card.addEventListener("dragstart", (event) => {
+        dragAssetIndex = index;
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("application/x-emberimage-asset", asset.id);
+        card.classList.add("dragging");
+      });
+      card.addEventListener("dragover", (event) => {
+        if (dragAssetIndex === null || event.dataTransfer.types.includes("Files")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = "move";
+        const rect = card.getBoundingClientRect();
+        const before = event.clientX < rect.left + rect.width / 2;
+        clearAssetDropIndicators();
+        card.classList.add(before ? "drop-before" : "drop-after");
+      });
+      card.addEventListener("drop", (event) => {
+        if (dragAssetIndex === null || event.dataTransfer.types.includes("Files")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = card.getBoundingClientRect();
+        const before = event.clientX < rect.left + rect.width / 2;
+        const target = before ? index : index + 1;
+        const from = dragAssetIndex;
+        clearAssetDropIndicators();
+        dragAssetIndex = null;
+        moveAssetTo(from, target);
+      });
+      card.addEventListener("dragend", () => {
+        dragAssetIndex = null;
+        card.classList.remove("dragging");
+        clearAssetDropIndicators();
+      });
       grid.append(card);
     });
     $("#asset-count").textContent = `${state.editAssets.length} / ${Validation.MAX_EDIT_IMAGES}`;
@@ -777,13 +811,15 @@
     catch { /* Registry entry is already gone after a restart. */ }
   }
 
-  async function moveAsset(index, delta) {
-    const target = index + delta;
-    if (target < 0 || target >= state.editAssets.length) return;
-    if ((index === 0 || target === 0) && !confirmDiscardMask()) return;
-    if ((index === 0 || target === 0) && state.mask.maskAssetId) await discardMask();
-    const [asset] = state.editAssets.splice(index, 1);
-    state.editAssets.splice(target, 0, asset);
+  async function moveAssetTo(from, insertIndex) {
+    if (from < 0 || from >= state.editAssets.length) return;
+    const target = Math.max(0, Math.min(state.editAssets.length, insertIndex));
+    const to = target > from ? target - 1 : target;
+    if (to === from || to < 0 || to >= state.editAssets.length) return;
+    if ((from === 0 || to === 0) && !confirmDiscardMask()) return;
+    if ((from === 0 || to === 0) && state.mask.maskAssetId) await discardMask();
+    const [asset] = state.editAssets.splice(from, 1);
+    state.editAssets.splice(to, 0, asset);
     renderAssets();
     updateGenerationState();
   }
@@ -1051,38 +1087,63 @@
     });
   }
 
+  const viewerMaskCache = { src: null, image: null };
+
   async function renderViewerImage() {
     const img = $("#image-viewer-image");
     const baseSrc = state.viewerWhich === "original" && state.viewerCompareSrc ? state.viewerCompareSrc : state.viewerResultSrc;
     if (!baseSrc) return;
-    if (!state.viewerMaskOn || !state.viewerMaskSrc) { img.src = baseSrc; return; }
-    try {
-      const [baseImage, maskImage] = await Promise.all([loadImageElement(baseSrc), loadImageElement(state.viewerMaskSrc)]);
-      const cap = 2048;
-      const scale = Math.min(1, cap / Math.max(baseImage.naturalWidth, baseImage.naturalHeight));
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(baseImage.naturalWidth * scale));
-      canvas.height = Math.max(1, Math.round(baseImage.naturalHeight * scale));
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(baseImage, 0, 0, canvas.width, canvas.height);
-      // Mask 中完全透明（Alpha=0）的像素是编辑区域，叠合时重着色为半透明橙色。
-      const maskCanvas = document.createElement("canvas");
-      maskCanvas.width = canvas.width;
-      maskCanvas.height = canvas.height;
-      const maskCtx = maskCanvas.getContext("2d");
-      maskCtx.drawImage(maskImage, 0, 0, maskCanvas.width, maskCanvas.height);
-      const pixelData = maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-      const px = pixelData.data;
-      for (let i = 0; i < px.length; i += 4) {
-        if (px[i + 3] < 128) { px[i] = 255; px[i + 1] = 108; px[i + 2] = 74; px[i + 3] = 140; }
-        else { px[i + 3] = 0; }
-      }
-      maskCtx.putImageData(pixelData, 0, 0);
-      ctx.drawImage(maskCanvas, 0, 0);
-      img.src = canvas.toDataURL("image/png");
-    } catch {
-      img.src = baseSrc;
+    $("#image-viewer-mask-overlay").classList.add("hidden");
+    img.src = baseSrc;
+    updateViewerMaskOverlay();
+  }
+
+  function updateViewerMaskOverlay() {
+    const img = $("#image-viewer-image");
+    const overlay = $("#image-viewer-mask-overlay");
+    if (!state.viewerMaskOn || !state.viewerMaskSrc || !img.complete || !img.naturalWidth) {
+      overlay.classList.add("hidden");
+      return;
     }
+    const boxW = img.clientWidth;
+    const boxH = img.clientHeight;
+    if (!boxW || !boxH) { overlay.classList.add("hidden"); return; }
+    const scale = Math.min(boxW / img.naturalWidth, boxH / img.naturalHeight);
+    const w = img.naturalWidth * scale;
+    const h = img.naturalHeight * scale;
+    overlay.style.left = `${img.offsetLeft + (boxW - w) / 2}px`;
+    overlay.style.top = `${img.offsetTop + (boxH - h) / 2}px`;
+    overlay.style.width = `${w}px`;
+    overlay.style.height = `${h}px`;
+    overlay.classList.remove("hidden");
+    drawViewerMaskTint(w, h);
+  }
+
+  async function drawViewerMaskTint(width, height) {
+    const overlay = $("#image-viewer-mask-overlay");
+    const maskSrc = state.viewerMaskSrc;
+    let maskImage = viewerMaskCache.src === maskSrc ? viewerMaskCache.image : null;
+    if (!maskImage) {
+      try { maskImage = await loadImageElement(maskSrc); }
+      catch { overlay.classList.add("hidden"); return; }
+      viewerMaskCache.src = maskSrc;
+      viewerMaskCache.image = maskImage;
+    }
+    if (!state.viewerMaskOn || state.viewerMaskSrc !== maskSrc || $("#image-viewer").classList.contains("hidden")) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    overlay.width = Math.max(1, Math.round(width * dpr));
+    overlay.height = Math.max(1, Math.round(height * dpr));
+    const ctx = overlay.getContext("2d");
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    ctx.drawImage(maskImage, 0, 0, overlay.width, overlay.height);
+    // Mask 中完全透明（Alpha=0）的像素是编辑区域，叠合时重着色为半透明橙色。
+    const pixelData = ctx.getImageData(0, 0, overlay.width, overlay.height);
+    const px = pixelData.data;
+    for (let i = 0; i < px.length; i += 4) {
+      if (px[i + 3] < 128) { px[i] = 255; px[i + 1] = 108; px[i + 2] = 74; px[i + 3] = 140; }
+      else { px[i + 3] = 0; }
+    }
+    ctx.putImageData(pixelData, 0, 0);
   }
 
   function openImageViewer(src, caption = "", options = {}) {
@@ -1110,6 +1171,7 @@
   function closeImageViewer() {
     $("#image-viewer").classList.add("hidden");
     $("#image-viewer-image").removeAttribute("src");
+    $("#image-viewer-mask-overlay").classList.add("hidden");
     $("#image-viewer-compare").classList.add("hidden");
     $("#image-viewer-mask-toggle").classList.add("hidden");
     state.viewerResultSrc = null;
@@ -1138,6 +1200,7 @@
     session: null,
     tool: "brush",
     previewOn: true,
+    inverted: false,
     drawing: null,
     spaceDown: false,
     panning: null,
@@ -1147,7 +1210,10 @@
   function openMaskEditor() {
     if (state.creationMode !== "edit" || !state.editAssets.length || requestBusy() || maskEditor.open) return;
     const base = state.editAssets[0];
-    if (state.mask.baseAssetId && state.mask.baseAssetId !== base.id) state.mask.strokes = [];
+    if (state.mask.baseAssetId && state.mask.baseAssetId !== base.id) {
+      state.mask.strokes = [];
+      state.mask.inverted = false;
+    }
     const image = new Image();
     image.onload = () => {
       maskEditor.baseImage = image;
@@ -1156,10 +1222,12 @@
       maskEditor.session = MaskModel.createMaskSession(state.mask.strokes);
       maskEditor.tool = "brush";
       maskEditor.previewOn = true;
+      maskEditor.inverted = state.mask.inverted === true;
       maskEditor.drawing = null;
       maskEditor.open = true;
       selectSegment("#mask-tool-control", "brush");
       $("#mask-preview-toggle").setAttribute("aria-pressed", "true");
+      $("#mask-invert-button").setAttribute("aria-pressed", String(maskEditor.inverted));
       $("#mask-editor-overlay").classList.remove("hidden");
       layoutMaskCanvas();
       updateMaskEditorButtons();
@@ -1230,11 +1298,26 @@
     ctx.stroke();
   }
 
-  function renderFullOverlay() {
+  function invertMaskCanvas(canvas) {
+    const ctx = canvas.getContext("2d");
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const px = data.data;
+    for (let i = 0; i < px.length; i += 4) {
+      px[i] = 255;
+      px[i + 1] = 108;
+      px[i + 2] = 74;
+      px[i + 3] = 255 - px[i + 3];
+    }
+    ctx.putImageData(data, 0, 0);
+  }
+
+  function renderFullOverlay(liveStroke = null) {
     const ctx = maskEditor.overlay.getContext("2d");
     ctx.clearRect(0, 0, maskEditor.overlay.width, maskEditor.overlay.height);
     if (!maskEditor.session) return;
     for (const stroke of maskEditor.session.strokes) paintStrokeOn(ctx, stroke, maskEditor.viewScale, "overlay");
+    if (liveStroke) paintStrokeOn(ctx, liveStroke, maskEditor.viewScale, "overlay");
+    if (maskEditor.inverted) invertMaskCanvas(maskEditor.overlay);
   }
 
   function drawMaskEditor() {
@@ -1265,6 +1348,30 @@
     $("#confirm-mask-button").disabled = maskEditor.session.isEmpty() || maskEditor.exporting;
   }
 
+  function undoMaskStroke() {
+    if (!maskEditor.session || !maskEditor.session.canUndo()) return;
+    maskEditor.session.undo();
+    renderFullOverlay();
+    drawMaskEditor();
+    updateMaskEditorButtons();
+  }
+
+  function redoMaskStroke() {
+    if (!maskEditor.session || !maskEditor.session.canRedo()) return;
+    maskEditor.session.redo();
+    renderFullOverlay();
+    drawMaskEditor();
+    updateMaskEditorButtons();
+  }
+
+  function toggleMaskInvert() {
+    if (!maskEditor.session || maskEditor.session.isEmpty()) return;
+    maskEditor.inverted = !maskEditor.inverted;
+    $("#mask-invert-button").setAttribute("aria-pressed", String(maskEditor.inverted));
+    renderFullOverlay();
+    drawMaskEditor();
+  }
+
   function handleMaskPointerDown(event) {
     if (!maskEditor.open || event.button !== 0) return;
     const stage = $("#mask-editor-stage");
@@ -1277,7 +1384,8 @@
     event.preventDefault();
     $("#mask-canvas").setPointerCapture(event.pointerId);
     maskEditor.drawing = { tool: maskEditor.tool, radius: Number($("#mask-brush-range").value), points: [point] };
-    paintStrokeOn(maskEditor.overlay.getContext("2d"), maskEditor.drawing, maskEditor.viewScale, "overlay");
+    if (maskEditor.inverted) renderFullOverlay(maskEditor.drawing);
+    else paintStrokeOn(maskEditor.overlay.getContext("2d"), maskEditor.drawing, maskEditor.viewScale, "overlay");
     drawMaskEditor();
   }
 
@@ -1296,15 +1404,19 @@
     const last = points[points.length - 1];
     if (Math.abs(point.x - last.x) < 0.5 && Math.abs(point.y - last.y) < 0.5) return;
     points.push(point);
-    const ctx = maskEditor.overlay.getContext("2d");
-    ctx.globalCompositeOperation = maskEditor.drawing.tool === "brush" ? "source-over" : "destination-out";
-    ctx.strokeStyle = "rgba(255, 108, 74, 1)";
-    ctx.lineWidth = Math.max(1, maskEditor.drawing.radius * maskEditor.viewScale * 2);
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(last.x * maskEditor.viewScale, last.y * maskEditor.viewScale);
-    ctx.lineTo(point.x * maskEditor.viewScale, point.y * maskEditor.viewScale);
-    ctx.stroke();
+    if (maskEditor.inverted) {
+      renderFullOverlay(maskEditor.drawing);
+    } else {
+      const ctx = maskEditor.overlay.getContext("2d");
+      ctx.globalCompositeOperation = maskEditor.drawing.tool === "brush" ? "source-over" : "destination-out";
+      ctx.strokeStyle = "rgba(255, 108, 74, 1)";
+      ctx.lineWidth = Math.max(1, maskEditor.drawing.radius * maskEditor.viewScale * 2);
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(last.x * maskEditor.viewScale, last.y * maskEditor.viewScale);
+      ctx.lineTo(point.x * maskEditor.viewScale, point.y * maskEditor.viewScale);
+      ctx.stroke();
+    }
     drawMaskEditor();
   }
 
@@ -1334,12 +1446,13 @@
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       for (const stroke of maskEditor.session.strokes) paintStrokeOn(ctx, stroke, 1, "export");
       ctx.globalCompositeOperation = "source-over";
+      if (maskEditor.inverted) invertMaskCanvas(canvas);
       const blob = await new Promise((resolve, reject) => canvas.toBlob((result) => (result ? resolve(result) : reject(new Error("导出失败"))), "image/png"));
       const buffer = new Uint8Array(await blob.arrayBuffer());
       const base = state.editAssets[0];
       const result = unwrap(await api.saveMask(buffer, base.id));
       const previousMaskId = state.mask.maskAssetId;
-      state.mask = { maskAssetId: result.maskAsset.id, baseAssetId: base.id, strokes: maskEditor.session.strokes, asset: result.maskAsset };
+      state.mask = { maskAssetId: result.maskAsset.id, baseAssetId: base.id, strokes: maskEditor.session.strokes, inverted: maskEditor.inverted, asset: result.maskAsset };
       if (previousMaskId && previousMaskId !== result.maskAsset.id) api.removeAsset(previousMaskId).catch(() => {});
       closeMaskEditor();
       setEditScope("mask");
@@ -1677,20 +1790,9 @@
     selectSegment("#mask-tool-control", maskEditor.tool);
   }));
   $("#mask-brush-range").addEventListener("input", () => { $("#mask-brush-value").textContent = $("#mask-brush-range").value; });
-  $("#mask-undo-button").addEventListener("click", () => {
-    if (!maskEditor.session) return;
-    maskEditor.session.undo();
-    renderFullOverlay();
-    drawMaskEditor();
-    updateMaskEditorButtons();
-  });
-  $("#mask-redo-button").addEventListener("click", () => {
-    if (!maskEditor.session) return;
-    maskEditor.session.redo();
-    renderFullOverlay();
-    drawMaskEditor();
-    updateMaskEditorButtons();
-  });
+  $("#mask-undo-button").addEventListener("click", undoMaskStroke);
+  $("#mask-redo-button").addEventListener("click", redoMaskStroke);
+  $("#mask-invert-button").addEventListener("click", toggleMaskInvert);
   $("#mask-clear-canvas-button").addEventListener("click", () => {
     if (!maskEditor.session || maskEditor.session.isEmpty()) return;
     if (!window.confirm("清空全部编辑区域？")) return;
@@ -1731,6 +1833,23 @@
     maskEditor.spaceDown = false;
     maskEditor.panning = null;
     $("#mask-canvas").style.cursor = "";
+  });
+  window.addEventListener("keydown", (event) => {
+    if (!maskEditor.open) return;
+    if (event.target && ["INPUT", "TEXTAREA"].includes(event.target.tagName)) return;
+    if (event.key === "[" || event.key === "]") {
+      event.preventDefault();
+      const range = $("#mask-brush-range");
+      const next = Math.min(Number(range.max), Math.max(Number(range.min), Number(range.value) + (event.key === "]" ? 10 : -10)));
+      range.value = String(next);
+      $("#mask-brush-value").textContent = range.value;
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "z") {
+      event.preventDefault();
+      if (event.shiftKey) redoMaskStroke();
+      else undoMaskStroke();
+    }
   });
   $("#upload-zone").addEventListener("click", () => {
     if (state.isImportingAssets || state.editAssets.length >= Validation.MAX_EDIT_IMAGES) return;
@@ -1880,6 +1999,11 @@
     if (event.target === $("#request-log-overlay")) $("#request-log-overlay").classList.add("hidden");
   });
   $("#close-image-viewer-button").addEventListener("click", closeImageViewer);
+  $("#image-viewer-image").addEventListener("load", updateViewerMaskOverlay);
+  window.addEventListener("resize", () => {
+    if ($("#image-viewer").classList.contains("hidden")) return;
+    updateViewerMaskOverlay();
+  });
   $$("#image-viewer-compare button").forEach((button) => button.addEventListener("click", () => setViewerImage(button.dataset.value)));
   $("#image-viewer-mask-toggle").addEventListener("click", () => {
     state.viewerMaskOn = !state.viewerMaskOn;

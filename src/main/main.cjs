@@ -11,6 +11,7 @@ const { AppStorage, DEFAULT_PROFILE } = require("./storage.cjs");
 const { decryptSecret, decryptSecretForDevice, encryptSecretForDevice, maskSecret } = require("./secure-store.cjs");
 const Validation = require("../shared/validation.js");
 const { buildEditFormData } = require("../shared/edit-form.js");
+const Exif = require("../shared/exif.js");
 
 let mainWindow;
 let storage;
@@ -588,9 +589,39 @@ function publicAsset(asset) {
   };
 }
 
+async function correctJpegOrientation(image, bytes) {
+  const orientation = Exif.jpegOrientation(bytes);
+  if (!orientation || orientation === 1) return null;
+  const size = image.getSize();
+  if (!size.width || !size.height) return null;
+  const bitmap = Buffer.from(image.toBitmap());
+  if (bitmap.length !== size.width * size.height * 4) return null;
+  const transformed = Exif.transformBitmap(bitmap, size.width, size.height, orientation);
+  const upright = nativeImage.createFromBitmap(transformed.buffer, { width: transformed.width, height: transformed.height });
+  if (upright.isEmpty()) return null;
+  const reEncoded = upright.toJPEG(92);
+  const id = crypto.randomUUID();
+  const stagingDir = path.join(storage.tmpDirectory, "assets");
+  await fs.mkdir(stagingDir, { recursive: true, mode: 0o700 });
+  const stagingPath = path.join(stagingDir, `${id}-upright.jpg`);
+  await fs.writeFile(stagingPath, reEncoded, { mode: 0o600 });
+  return { filePath: stagingPath, bytes: Buffer.from(reEncoded), ownsFile: true };
+}
+
 async function registerAsset(filePath, bytes, fileName, mime, ownsFile) {
-  const image = nativeImage.createFromBuffer(bytes);
+  let image = nativeImage.createFromBuffer(bytes);
   if (image.isEmpty()) throw new AppError("无法读取此图片，文件可能已损坏", { code: "decode_error" });
+  if (mime === "image/jpeg") {
+    // nativeImage 不会自动应用 EXIF 方向；这里按像素摆正并重编码，避免把旋转标签发给服务。
+    const corrected = await correctJpegOrientation(image, bytes);
+    if (corrected) {
+      const previousPath = filePath;
+      const previouslyOwned = ownsFile;
+      ({ filePath, bytes, ownsFile } = corrected);
+      if (previouslyOwned && previousPath !== filePath) await fs.rm(previousPath, { force: true }).catch(() => {});
+      image = nativeImage.createFromBuffer(bytes);
+    }
+  }
   const size = image.getSize();
   const id = crypto.randomUUID();
   const longest = Math.max(size.width, size.height);

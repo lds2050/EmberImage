@@ -776,6 +776,23 @@ summary:focus-visible {
   box-shadow: 0 0 0 3px var(--coral-soft);
 }
 
+.asset-card {
+  cursor: grab;
+}
+
+.asset-card.dragging {
+  opacity: 0.45;
+  cursor: grabbing;
+}
+
+.asset-card.drop-before {
+  box-shadow: inset 3px 0 0 0 var(--coral);
+}
+
+.asset-card.drop-after {
+  box-shadow: inset -3px 0 0 0 var(--coral);
+}
+
 .asset-card img {
   width: 100%;
   aspect-ratio: 1;
@@ -783,6 +800,7 @@ summary:focus-visible {
   border-radius: 8px;
   background: var(--paper-deep);
   user-select: none;
+  -webkit-user-drag: none;
 }
 
 .asset-role {
@@ -3036,6 +3054,11 @@ summary:focus-visible {
   user-select: none;
 }
 
+#image-viewer-mask-overlay {
+  position: absolute;
+  pointer-events: none;
+}
+
 .image-viewer p {
   max-width: 920px;
   margin: 13px 0 0;
@@ -3525,6 +3548,13 @@ summary:focus-visible {
   color: #7a766d;
   border-color: rgba(255, 255, 255, 0.1);
   cursor: not-allowed;
+}
+
+.mask-editor-toolbar .ghost-button[aria-pressed="true"] {
+  color: #20201e;
+  background: #fff;
+  border-color: #fff;
+  font-weight: 680;
 }
 
 .mask-editor-stage {

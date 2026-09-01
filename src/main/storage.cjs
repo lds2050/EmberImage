@@ -66,9 +66,16 @@ class AppStorage {
   async initialize() {
     await fs.mkdir(this.resultsDirectory, { recursive: true, mode: 0o700 });
     await fs.mkdir(this.historyMediaDirectory, { recursive: true, mode: 0o700 });
-    await fs.mkdir(this.tmpDirectory, { recursive: true, mode: 0o700 });
-    await fs.mkdir(this.thumbsDirectory, { recursive: true, mode: 0o700 });
+    await this.resetEphemeralDirectories();
     await this.migrateHistory();
+  }
+
+  async resetEphemeralDirectories() {
+    // tmp/thumbs 只被内存中的素材注册表和进行中的请求引用，重启后残留即孤儿，启动时清空。
+    for (const directory of [this.tmpDirectory, this.thumbsDirectory]) {
+      await fs.rm(directory, { recursive: true, force: true });
+      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    }
   }
 
   _safeSegment(value) {

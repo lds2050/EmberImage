@@ -54,7 +54,7 @@
           </button>
         </div>
 
-        <p class="version-label" id="version-label">V0.5.1</p>
+        <p class="version-label" id="version-label">V0.5.2</p>
       </aside>
 
       <main class="main-area">
@@ -104,7 +104,7 @@
                 </div>
                 <div class="upload-zone" id="upload-zone" role="button" tabindex="0" aria-label="添加图片">
                   <p class="upload-zone-title" id="upload-zone-title">点击、拖入或粘贴图片</p>
-                  <p class="upload-zone-hint">PNG · JPEG · WebP · 单张 ≤ 50 MB · 最多 16 张 · 第 1 张为主图</p>
+                  <p class="upload-zone-hint">PNG · JPEG · WebP · 单张 ≤ 50 MB · 最多 16 张 · 第 1 张为主图 · 拖拽卡片可调整顺序</p>
                 </div>
                 <p class="field-error" id="asset-error"></p>
                 <div class="asset-grid" id="asset-grid"></div>
@@ -477,6 +477,7 @@
       <button class="image-viewer-close" id="close-image-viewer-button" type="button" aria-label="关闭图片预览">×</button>
       <button class="mask-view-toggle hidden" id="image-viewer-mask-toggle" type="button" aria-pressed="false">显示编辑区域</button>
       <img id="image-viewer-image" alt="放大预览" />
+      <canvas id="image-viewer-mask-overlay" class="hidden" aria-hidden="true"></canvas>
       <div class="result-compare-toggle hidden" id="image-viewer-compare">
         <button type="button" data-value="result" class="active">结果</button>
         <button type="button" data-value="original">原图</button>
@@ -611,6 +612,7 @@
           <div class="mask-editor-actions">
             <button class="ghost-button" id="mask-undo-button" type="button">撤销</button>
             <button class="ghost-button" id="mask-redo-button" type="button">重做</button>
+            <button class="ghost-button" id="mask-invert-button" type="button" aria-pressed="false">反选</button>
             <button class="ghost-button danger" id="mask-clear-canvas-button" type="button">清空</button>
           </div>
           <div class="mask-editor-view">
@@ -623,7 +625,7 @@
           <canvas id="mask-canvas"></canvas>
         </div>
         <div class="mask-editor-footer">
-          <p>模型可能对标记区域边缘做适当调整</p>
+          <p>模型可能对标记区域边缘做适当调整 · [ ] 调整画笔大小 · ⌘/Ctrl+Z 撤销</p>
           <div class="mask-editor-confirm">
             <button class="secondary-button" id="cancel-mask-editor-button" type="button">取消</button>
             <button class="primary-button compact" id="confirm-mask-button" type="button" disabled>确认区域</button>
