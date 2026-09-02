@@ -27,6 +27,14 @@ self.onmessage = (event) => {
       self.postMessage({ id, ok: true });
       return;
     }
+    if (op === "releaseBitmap") {
+      // 编辑器关闭后主动释放位图副本（4K 图约 67MB），避免常驻占用
+      bitmap = null;
+      bitmapWidth = 0;
+      bitmapHeight = 0;
+      self.postMessage({ id, ok: true });
+      return;
+    }
     if (op === "floodFill") {
       postMask(id, Algorithms.floodFill(bitmap, bitmapWidth, bitmapHeight, payload.x, payload.y, payload.tolerance, { contiguous: payload.contiguous !== false }));
       return;

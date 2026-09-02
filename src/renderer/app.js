@@ -698,6 +698,7 @@
         openAssetContextMenu(asset, index, event);
       });
       card.addEventListener("dragstart", (event) => {
+        hideAssetContextMenu();
         dragAssetIndex = index;
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("application/x-emberimage-asset", asset.id);
@@ -1298,6 +1299,8 @@
         if (!task) return;
         selectionCompute.pending.delete(id);
         clearTimeout(task.timer);
+        // 编辑器已在计算途中关闭：此时请求已落地，可以安全释放位图了
+        if (!maskEditor.open && !selectionCompute.pending.size) releaseSelectionBitmap();
         if (ok) task.resolve(mask);
         else task.reject(new Error(error || "选区计算失败"));
       };
@@ -1356,6 +1359,7 @@
       const timer = setTimeout(() => {
         selectionCompute.pending.delete(id);
         teardownSelectionWorker();
+        if (!maskEditor.open) maskEditor.bitmapData = null;
         reject(new Error("选区计算超时，请降低容差或使用套索"));
       }, 5000);
       selectionCompute.pending.set(id, { timer, resolve, reject });
@@ -1388,6 +1392,21 @@
         op: "setBitmap",
         payload: { bitmap: copy.buffer, width: canvas.width, height: canvas.height },
       }, [copy.buffer]);
+    }
+  }
+
+  // 编辑器关闭后释放主线程与 Worker 两侧的位图副本（4K 图各约 67MB）。
+  // 仍有选区计算在途时先不释放，否则正在跑的请求会拿不到位图而报错。
+  function releaseSelectionBitmap() {
+    if (selectionCompute.pending.size) return;
+    maskEditor.bitmapData = null;
+    const worker = selectionCompute.worker;
+    if (worker) {
+      worker.postMessage({
+        id: `sel-${selectionCompute.nextId += 1}`,
+        op: "releaseBitmap",
+        payload: {},
+      });
     }
   }
 
@@ -1749,6 +1768,7 @@
     maskEditor.selectionBusy = false;
     stopSelectionAnts();
     resetSelectionLayer();
+    releaseSelectionBitmap();
     $("#mask-editor-overlay").classList.add("hidden");
   }
 
@@ -2311,7 +2331,11 @@
     updateGenerationState();
   }
 
-  window.addEventListener("resize", applyWindowScale);
+  window.addEventListener("resize", () => {
+    applyWindowScale();
+    // 固定定位的右键菜单在窗口尺寸变化后可能落到视口外，直接收起
+    hideAssetContextMenu();
+  });
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".history-entry")) {
       $$(".history-card-menu").forEach((node) => node.classList.add("hidden"));
