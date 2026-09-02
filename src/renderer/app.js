@@ -39,6 +39,7 @@
     viewerMaskSrc: null,
     viewerMaskOn: false,
     viewerWhich: "result",
+    viewerRemoveBgAsset: null,
   };
 
   function unwrap(result) {
@@ -691,7 +692,11 @@
           <button type="button" class="danger" data-action="remove" aria-label="移除">✕</button>
         </div>`;
       card.querySelector('[data-action="remove"]').addEventListener("click", () => removeAssetAt(index));
-      card.querySelector("img").addEventListener("dblclick", () => openImageViewer(asset.originalUrl, asset.fileName));
+      card.querySelector("img").addEventListener("dblclick", () => openImageViewer(asset.originalUrl, asset.fileName, { removeBackgroundAsset: asset }));
+      card.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        openAssetContextMenu(asset, index, event);
+      });
       card.addEventListener("dragstart", (event) => {
         dragAssetIndex = index;
         event.dataTransfer.effectAllowed = "move";
@@ -1047,6 +1052,7 @@
     state.viewerResultSrc = src;
     state.viewerCompareSrc = options.compareSrc || null;
     state.viewerMaskSrc = options.maskSrc || null;
+    state.viewerRemoveBgAsset = options.removeBackgroundAsset || null;
     state.viewerMaskOn = false;
     state.viewerWhich = "result";
     $("#image-viewer-caption").textContent = caption;
@@ -1054,6 +1060,7 @@
     $$("#image-viewer-compare button").forEach((button) => button.classList.toggle("active", button.dataset.value === "result"));
     $("#image-viewer-mask-toggle").classList.toggle("hidden", !state.viewerMaskSrc);
     $("#image-viewer-mask-toggle").setAttribute("aria-pressed", "false");
+    $("#image-viewer-remove-bg-button").classList.toggle("hidden", !state.viewerRemoveBgAsset);
     $("#image-viewer").classList.remove("hidden");
     renderViewerImage();
   }
@@ -1070,9 +1077,11 @@
     $("#image-viewer-mask-overlay").classList.add("hidden");
     $("#image-viewer-compare").classList.add("hidden");
     $("#image-viewer-mask-toggle").classList.add("hidden");
+    $("#image-viewer-remove-bg-button").classList.add("hidden");
     state.viewerResultSrc = null;
     state.viewerCompareSrc = null;
     state.viewerMaskSrc = null;
+    state.viewerRemoveBgAsset = null;
     state.viewerMaskOn = false;
     state.viewerWhich = "result";
   }
@@ -1083,6 +1092,162 @@
 
   function editMaskSrc(entry) {
     return entry.operation === "edit" ? entry.mask?.previewUrl || null : null;
+  }
+
+  // ---- 背景移除（v0.5.3 阶段 C）：纯本地处理，自动主体 → 非主体透明化 → 预览导出 ----
+  const bgRemoval = { busy: false, blob: null, fileName: "" };
+
+  function closeBgRemoval() {
+    $("#bg-removal-overlay").classList.add("hidden");
+    bgRemoval.blob = null;
+    bgRemoval.fileName = "";
+  }
+
+  async function removeBackgroundFlow(asset) {
+    if (!asset || bgRemoval.busy) return;
+    bgRemoval.busy = true;
+    closeImageViewer();
+    hideAssetContextMenu();
+    $("#bg-removal-canvas").classList.add("hidden");
+    $("#bg-removal-loading").classList.remove("hidden");
+    $("#bg-removal-status").textContent = "正在识别主体…";
+    $("#bg-removal-import-button").disabled = true;
+    $("#bg-removal-export-button").disabled = true;
+    $("#bg-removal-overlay").classList.remove("hidden");
+    try {
+      const image = await loadImageElement(asset.originalUrl);
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(image, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let mask;
+      try {
+        // 位图随请求拷贝转移给 Worker；主图原始数据保留在本地供降级使用
+        mask = await runSelection("subjectMask", {
+          bitmap: imageData.data,
+          width: canvas.width,
+          height: canvas.height,
+          tolerance: 32,
+          maxEdge: 2048,
+        });
+      } catch {
+        // Worker 初始化失败/崩溃/超时 → 主线程降级（>2048px 自动降采样，不会长时间卡顿）
+        mask = Algorithms.subjectMask(imageData.data, canvas.width, canvas.height, 32, { maxEdge: 2048 });
+      }
+      if (!mask || !mask.some((value) => value)) {
+        closeBgRemoval();
+        toast("未能识别主体，请用魔棒或套索手动选择", "error");
+        return;
+      }
+      // 主体 Alpha=255、背景 Alpha=0，边缘羽化半径 2 平滑过渡
+      const alpha = new Uint8Array(mask.length);
+      for (let i = 0; i < mask.length; i += 1) alpha[i] = mask[i] ? 255 : 0;
+      const feathered = Algorithms.boxBlurChannel(alpha, canvas.width, canvas.height, 2, 1);
+      const output = ctx.createImageData(canvas.width, canvas.height);
+      for (let i = 0; i < mask.length; i += 1) {
+        const o = i * 4;
+        output.data[o] = imageData.data[o];
+        output.data[o + 1] = imageData.data[o + 1];
+        output.data[o + 2] = imageData.data[o + 2];
+        output.data[o + 3] = feathered[i];
+      }
+      const preview = $("#bg-removal-canvas");
+      preview.width = canvas.width;
+      preview.height = canvas.height;
+      preview.getContext("2d").putImageData(output, 0, 0);
+      const blob = await new Promise((resolve, reject) => preview.toBlob((result) => (result ? resolve(result) : reject(new Error("导出失败"))), "image/png"));
+      bgRemoval.blob = blob;
+      const base = String(asset.fileName || "image").replace(/\.[^.]+$/, "") || "image";
+      bgRemoval.fileName = `${base}-nobg.png`;
+      $("#bg-removal-loading").classList.add("hidden");
+      preview.classList.remove("hidden");
+      $("#bg-removal-status").textContent = `${canvas.width} × ${canvas.height} · 主体已保留，背景已透明`;
+      $("#bg-removal-import-button").disabled = false;
+      $("#bg-removal-export-button").disabled = false;
+    } catch (error) {
+      closeBgRemoval();
+      toast(error.message || "背景移除失败", "error");
+    } finally {
+      bgRemoval.busy = false;
+    }
+  }
+
+  function exportBgRemovalPng() {
+    if (!bgRemoval.blob) return;
+    const url = URL.createObjectURL(bgRemoval.blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = bgRemoval.fileName;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    toast("已导出透明 PNG");
+  }
+
+  async function importBgRemovalAsAsset() {
+    if (!bgRemoval.blob) return;
+    if (state.editAssets.length >= Validation.MAX_EDIT_IMAGES) {
+      toast(`最多添加 ${Validation.MAX_EDIT_IMAGES} 张图片，请先移除部分素材`, "error");
+      return;
+    }
+    try {
+      const buffer = new Uint8Array(await bgRemoval.blob.arrayBuffer());
+      const imported = unwrap(await api.importBuffer(buffer, bgRemoval.fileName));
+      state.editAssets.push(imported);
+      renderAssets();
+      closeBgRemoval();
+      toast("透明图片已加入素材面板");
+    } catch (error) {
+      toast(error.message || "加入素材失败", "error");
+    }
+  }
+
+  // ---- 素材卡片右键菜单：放大预览 / 移除背景 / 移除素材 ----
+  let assetContextMenu = null;
+
+  function hideAssetContextMenu() {
+    if (assetContextMenu) {
+      assetContextMenu.remove();
+      assetContextMenu = null;
+    }
+  }
+
+  function openAssetContextMenu(asset, index, event) {
+    hideAssetContextMenu();
+    const menu = document.createElement("div");
+    menu.className = "context-menu";
+    menu.setAttribute("role", "menu");
+    const items = [
+      { label: "放大预览", action: () => openImageViewer(asset.originalUrl, asset.fileName, { removeBackgroundAsset: asset }) },
+      { label: "移除背景", action: () => removeBackgroundFlow(asset) },
+      { separator: true },
+      { label: "移除素材", danger: true, action: () => removeAssetAt(index) },
+    ];
+    items.forEach((item) => {
+      if (item.separator) {
+        const divider = document.createElement("div");
+        divider.className = "context-menu-separator";
+        menu.append(divider);
+        return;
+      }
+      const button = document.createElement("button");
+      button.type = "button";
+      if (item.danger) button.className = "danger";
+      button.textContent = item.label;
+      button.addEventListener("click", () => {
+        hideAssetContextMenu();
+        item.action();
+      });
+      menu.append(button);
+    });
+    document.body.append(menu);
+    const rect = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(event.clientX, window.innerWidth - rect.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(event.clientY, window.innerHeight - rect.height - 8))}px`;
+    assetContextMenu = menu;
   }
 
   const maskEditor = {
@@ -1168,7 +1333,11 @@
       return Algorithms.fillPolygon(payload.points, payload.width, payload.height);
     }
     if (op === "subjectMask") {
-      return Algorithms.subjectMask(bitmap, maskEditor.imgW, maskEditor.imgH, payload.tolerance, payload);
+      // 独立流程（背景移除）自带位图；编辑器内用已同步的主图位图。
+      const source = payload.bitmap || bitmap;
+      const w = payload.bitmap ? payload.width | 0 : maskEditor.imgW;
+      const h = payload.bitmap ? payload.height | 0 : maskEditor.imgH;
+      return Algorithms.subjectMask(source, w, h, payload.tolerance, payload);
     }
     throw new Error(`未知选区操作：${op}`);
   }
@@ -1190,7 +1359,15 @@
         reject(new Error("选区计算超时，请降低容差或使用套索"));
       }, 5000);
       selectionCompute.pending.set(id, { timer, resolve, reject });
-      worker.postMessage({ id, op, payload });
+      // 携带位图的请求先做独立副本再转移所有权，原位图保留给主线程降级路径。
+      let message = { id, op, payload };
+      const transfer = [];
+      if (payload && payload.bitmap && payload.bitmap.buffer) {
+        const copy = new Uint8Array(payload.bitmap);
+        message = { id, op, payload: Object.assign({}, payload, { bitmap: copy }) };
+        transfer.push(copy.buffer);
+      }
+      worker.postMessage(message, transfer);
     });
   }
 
@@ -1370,6 +1547,41 @@
     drawMaskEditor();
   }
 
+  // 自动主体：一键启发式圈选画面主体（固定容差，大图自动降采样计算），结果作为活动选区。
+  async function autoSubjectSelection() {
+    if (!maskEditor.open || maskEditor.selectionBusy) return;
+    maskEditor.selectionBusy = true;
+    updateSelectionToolUi();
+    try {
+      const mask = await runSelection("subjectMask", { tolerance: 32, maxEdge: 2048 });
+      if (!mask || !mask.some((value) => value)) {
+        toast("未能识别主体，请用魔棒或套索手动选择", "error");
+        return;
+      }
+      applySelectionMask(mask, "replace");
+      toast("已自动选中主体，可反选/羽化后应用为 Mask");
+    } catch (error) {
+      if (error && error.message === "worker-unavailable") {
+        try {
+          const mask = computeSelectionOnMainThread("subjectMask", { tolerance: 32, maxEdge: 2048 });
+          if (!mask || !mask.some((value) => value)) {
+            toast("未能识别主体，请用魔棒或套索手动选择", "error");
+            return;
+          }
+          applySelectionMask(mask, "replace");
+          toast("已自动选中主体，可反选/羽化后应用为 Mask");
+        }
+        catch (inner) { toast(inner.message || "选区计算失败", "error"); }
+      } else {
+        toast(error.message || "选区计算失败", "error");
+      }
+    } finally {
+      maskEditor.selectionBusy = false;
+      updateSelectionToolUi();
+      drawMaskEditor();
+    }
+  }
+
   function invertSelection() {
     if (!selectionActive()) return;
     maskEditor.selectionSession.invert();
@@ -1401,10 +1613,12 @@
     const selecting = isSelectionTool();
     const active = selectionActive();
     const busy = maskEditor.selectionBusy;
+    const selectionUi = selecting || active;
     $("#mask-brush-size-field").classList.toggle("hidden", selecting);
     $("#mask-wand-options").classList.toggle("hidden", maskEditor.tool !== "wand");
-    $("#mask-feather-field").classList.toggle("hidden", !selecting);
-    $("#mask-selection-bar").classList.toggle("hidden", !selecting);
+    $("#mask-feather-field").classList.toggle("hidden", !selectionUi);
+    $("#mask-selection-bar").classList.toggle("hidden", !selectionUi);
+    $("#mask-auto-subject-button").disabled = busy;
     $$("#mask-tool-control button").forEach((button) => { button.disabled = active; });
     ["#mask-selection-invert-button", "#mask-selection-cancel-button", "#mask-selection-apply-button"].forEach((id) => {
       $(id).disabled = !active || busy;
@@ -2103,11 +2317,16 @@
       $$(".history-card-menu").forEach((node) => node.classList.add("hidden"));
       $$(".history-menu-button").forEach((node) => node.classList.remove("active"));
     }
+    if (!event.target.closest(".context-menu")) hideAssetContextMenu();
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     if (maskEditor.open && selectionActive()) {
       cancelSelection();
+      return;
+    }
+    if (!$("#bg-removal-overlay").classList.contains("hidden")) {
+      closeBgRemoval();
       return;
     }
     closeImageViewer();
@@ -2171,6 +2390,13 @@
   $("#mask-selection-invert-button").addEventListener("click", invertSelection);
   $("#mask-selection-cancel-button").addEventListener("click", cancelSelection);
   $("#mask-selection-apply-button").addEventListener("click", applySelectionAsMask);
+  $("#mask-auto-subject-button").addEventListener("click", autoSubjectSelection);
+  $("#close-bg-removal-button").addEventListener("click", closeBgRemoval);
+  $("#bg-removal-import-button").addEventListener("click", importBgRemovalAsAsset);
+  $("#bg-removal-export-button").addEventListener("click", exportBgRemovalPng);
+  $("#image-viewer-remove-bg-button").addEventListener("click", () => {
+    if (state.viewerRemoveBgAsset) removeBackgroundFlow(state.viewerRemoveBgAsset);
+  });
   $("#mask-brush-range").addEventListener("input", () => { $("#mask-brush-value").textContent = $("#mask-brush-range").value; });
   $("#mask-undo-button").addEventListener("click", undoMaskStroke);
   $("#mask-redo-button").addEventListener("click", redoMaskStroke);

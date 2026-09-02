@@ -180,6 +180,37 @@ test("subjectMask: locates the synthetic subject, empty image yields empty mask"
   assert.equal(hullFilled[15 * width + 15], 1);
 });
 
+test("subjectMask: maxEdge downsamples large images and keeps the subject", () => {
+  const width = 120;
+  const height = 120;
+  const withSubject = makeBitmap(width, height, (x, y) => {
+    const inside = x >= 40 && x < 80 && y >= 36 && y < 84;
+    return inside ? [20, 30, 40] : [210, 205, 200];
+  });
+  const full = algorithms.subjectMask(withSubject, width, height, 40);
+  const scaled = algorithms.subjectMask(withSubject, width, height, 40, { maxEdge: 60 });
+  assert.equal(scaled.length, width * height, "downscaled result maps back to full size");
+  assert.equal(scaled[60 * width + 60], 1, "subject centre still selected");
+  assert.equal(scaled[2 * width + 2], 0, "background still excluded");
+  const fullPoints = maskToPoints(full, width);
+  const scaledPoints = maskToPoints(scaled, width);
+  // 降采样 + 模糊二值化会有 ±6% 的轮廓差异，但主体位置必须一致
+  const drift = Math.abs(scaledPoints.length - fullPoints.length) / fullPoints.length;
+  assert.ok(drift < 0.06, `subject area drift ${(drift * 100).toFixed(1)}% should stay under 6%`);
+});
+
+test("subjectMask: maxEdge larger than the image keeps the exact path", () => {
+  const width = 24;
+  const height = 24;
+  const withSubject = makeBitmap(width, height, (x, y) => {
+    const inside = x >= 6 && x < 18 && y >= 6 && y < 18;
+    return inside ? [20, 30, 40] : [210, 205, 200];
+  });
+  const plain = algorithms.subjectMask(withSubject, width, height, 40);
+  const withMax = algorithms.subjectMask(withSubject, width, height, 40, { maxEdge: 2048 });
+  assert.deepEqual(Array.from(withMax), Array.from(plain), "no downscale when image fits");
+});
+
 test("connectedComponents: two blobs counted with correct sizes", () => {
   const width = 10;
   const height = 10;

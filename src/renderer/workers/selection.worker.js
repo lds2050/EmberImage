@@ -36,7 +36,11 @@ self.onmessage = (event) => {
       return;
     }
     if (op === "subjectMask") {
-      postMask(id, Algorithms.subjectMask(bitmap, bitmapWidth, bitmapHeight, payload.tolerance, { fillHull: payload.fillHull === true, patchSize: payload.patchSize }));
+      // 编辑器内走 setBitmap 推入的主图；背景移除等独立流程直接携带位图（payload.bitmap）。
+      const source = payload.bitmap ? new Uint8Array(payload.bitmap) : bitmap;
+      const w = payload.bitmap ? payload.width | 0 : bitmapWidth;
+      const h = payload.bitmap ? payload.height | 0 : bitmapHeight;
+      postMask(id, Algorithms.subjectMask(source, w, h, payload.tolerance, { fillHull: payload.fillHull === true, patchSize: payload.patchSize, maxEdge: payload.maxEdge | 0 }));
       return;
     }
     throw new Error(`未知选区操作：${op}`);

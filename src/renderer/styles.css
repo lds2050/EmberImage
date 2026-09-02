@@ -2752,6 +2752,11 @@ summary:focus-visible {
   font-weight: 680;
 }
 
+/* 与“显示编辑区域”并排，避免右上角按钮重叠 */
+#image-viewer-remove-bg-button {
+  right: 178px;
+}
+
 .result-compare-toggle {
   position: absolute;
   top: 20px;
@@ -3276,4 +3281,93 @@ summary:focus-visible {
 
 .mask-editor-confirm .secondary-button:hover {
   border-color: rgba(255, 255, 255, 0.44);
+}
+
+/* ---- v0.5.3 阶段 C：素材右键菜单 / 移除背景对话框 ---- */
+
+.context-menu {
+  position: fixed;
+  z-index: 260;
+  display: grid;
+  min-width: 152px;
+  padding: 6px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  box-shadow: 0 14px 34px rgba(33, 28, 22, .22);
+}
+
+.context-menu button {
+  padding: 8px 10px;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.context-menu button:hover { background: #f3f0ea; }
+.context-menu button.danger { color: var(--danger); }
+.context-menu button.danger:hover { background: var(--danger-soft); }
+
+.context-menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
+}
+
+.bg-removal-dialog { width: 620px; }
+
+.bg-removal-stage {
+  display: grid;
+  min-height: 260px;
+  max-height: 56vh;
+  margin: 16px 0;
+  overflow: auto;
+  place-items: center;
+  background-color: #f1efe9;
+  /* 透明区域棋盘格，便于确认抠图结果 */
+  background-image:
+    linear-gradient(45deg, #dcd8d0 25%, transparent 25%, transparent 75%, #dcd8d0 75%),
+    linear-gradient(45deg, #dcd8d0 25%, transparent 25%, transparent 75%, #dcd8d0 75%);
+  background-position: 0 0, 9px 9px;
+  background-size: 18px 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.bg-removal-stage canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 52vh;
+}
+
+.bg-removal-loading {
+  margin: 0;
+  padding: 40px 20px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.bg-removal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bg-removal-footer p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.bg-removal-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 10px;
 }

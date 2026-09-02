@@ -301,9 +301,14 @@
   }
 
   // 自动主体：与背景色不相似的像素 → 最大连通域（可选凸包近似）。
+  // opts.maxEdge：长边超过该值时先最近邻降采样计算，再把蒙版映射回全尺寸（PRD 9.3）。
   function subjectMask(bitmap, width, height, tolerance, options) {
     const opts = options || {};
     if (!bitmap || width <= 0 || height <= 0) return new Uint8Array(Math.max(0, width * height));
+    const maxEdge = Math.floor(Number(opts.maxEdge)) || 0;
+    if (maxEdge > 0 && Math.max(width, height) > maxEdge) {
+      return subjectMaskDownscaled(bitmap, width, height, tolerance, opts, maxEdge);
+    }
     const bg = backgroundFromCorners(bitmap, width, height, opts.patchSize);
     const threshold2 = similarityThreshold2(tolerance);
     const binary = new Uint8Array(width * height);
@@ -321,6 +326,45 @@
       if (labels[i] === largest) out[i] = 1;
     }
     return opts.fillHull ? convexHullFromMask(out, width, height) : out;
+  }
+
+  // 大图自动主体：降采样计算路径——最近邻缩到 maxEdge 内跑主体识别（凸包也在小图上完成），
+  // 蒙版最近邻放大回全尺寸后做一次盒式模糊 + 128 阈值二值化，柔化放大产生的方块边缘。
+  function subjectMaskDownscaled(bitmap, width, height, tolerance, opts, maxEdge) {
+    const longEdge = Math.max(width, height);
+    const scale = longEdge / maxEdge;
+    const sw = Math.max(1, Math.round(width / scale));
+    const sh = Math.max(1, Math.round(height / scale));
+    const small = new Uint8Array(sw * sh * 4);
+    for (let y = 0; y < sh; y += 1) {
+      const sy = Math.min(height - 1, Math.floor((y * height) / sh));
+      for (let x = 0; x < sw; x += 1) {
+        const sx = Math.min(width - 1, Math.floor((x * width) / sw));
+        const si = (sy * width + sx) * 4;
+        const di = (y * sw + x) * 4;
+        small[di] = bitmap[si];
+        small[di + 1] = bitmap[si + 1];
+        small[di + 2] = bitmap[si + 2];
+        small[di + 3] = bitmap[si + 3];
+      }
+    }
+    const smallMask = subjectMask(small, sw, sh, tolerance, opts);
+    const scaled = new Uint8Array(width * height);
+    for (let y = 0; y < height; y += 1) {
+      const sy = Math.min(sh - 1, Math.floor((y * sh) / height));
+      const row = sy * sw;
+      for (let x = 0; x < width; x += 1) {
+        const sx = Math.min(sw - 1, Math.floor((x * sw) / width));
+        scaled[y * width + x] = smallMask[row + sx];
+      }
+    }
+    const level = new Uint8Array(scaled.length);
+    for (let i = 0; i < scaled.length; i += 1) level[i] = scaled[i] ? 255 : 0;
+    const radius = Math.max(1, Math.min(4, Math.round(scale / 2)));
+    const blurred = boxBlurChannel(level, width, height, radius, 1);
+    const out = new Uint8Array(blurred.length);
+    for (let i = 0; i < blurred.length; i += 1) out[i] = blurred[i] >= 128 ? 1 : 0;
+    return out;
   }
 
   return {
