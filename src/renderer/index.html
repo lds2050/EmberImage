@@ -25,11 +25,6 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4" /></svg>
             <span>开始</span>
           </button>
-          <button class="nav-item" type="button" data-view-target="examples">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z" /><path d="m18.5 15 .8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z" /></svg>
-            <span>样例</span>
-            <span class="nav-count">6</span>
-          </button>
           <button class="nav-item" type="button" data-view-target="history">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5" /></svg>
             <span>画廊</span>
@@ -55,6 +50,11 @@
         </div>
 
         <p class="version-label" id="version-label">V0.5.2</p>
+
+        <a class="github-link" href="https://github.com/lds2050/EmberImage" target="_blank" rel="noopener noreferrer" aria-label="GitHub 仓库" title="GitHub 仓库">
+          <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" /></svg>
+          <span>GitHub</span>
+        </a>
       </aside>
 
       <main class="main-area">
@@ -314,26 +314,6 @@
           </div>
         </section>
 
-        <section class="view" id="view-examples" data-view="examples">
-          <div class="examples-toolbar">
-            <div class="example-categories" id="example-category-list" aria-label="样例分类"></div>
-            <label class="search-field example-search-field">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m16 16 5 5" /></svg>
-              <input id="example-search" type="search" placeholder="搜索场景、标签或提示词" />
-            </label>
-          </div>
-          <div class="examples-meta-row">
-            <span id="example-summary">6 个可复用样例</span>
-            <span>打开卡片可查看完整提示词与生成配置</span>
-          </div>
-          <div class="examples-grid" id="example-list"></div>
-          <div class="examples-empty hidden" id="examples-empty">
-            <div>✦</div>
-            <h3>没有匹配的样例</h3>
-            <p>换一个分类或搜索词试试。</p>
-          </div>
-        </section>
-
         <section class="view" id="view-history" data-view="history">
           <div class="history-toolbar">
             <label class="search-field">
@@ -549,32 +529,6 @@
       </section>
     </div>
 
-    <div class="example-dialog-backdrop hidden" id="example-detail-overlay">
-      <section class="example-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="example-detail-title">
-        <button class="dialog-close-button example-detail-close" id="close-example-detail-button" type="button" aria-label="关闭样例详情">×</button>
-        <div class="example-detail-visual">
-          <img id="example-detail-image" alt="样例图片" />
-        </div>
-        <div class="example-detail-content">
-          <div class="example-detail-heading">
-            <span class="example-category-label" id="example-detail-category"></span>
-            <h2 id="example-detail-title"></h2>
-            <p id="example-detail-summary"></p>
-          </div>
-          <div class="example-detail-parameters" id="example-detail-parameters"></div>
-          <div class="example-prompt-heading">
-            <strong>完整提示词</strong>
-            <button class="text-button" id="copy-example-prompt-button" type="button">复制提示词</button>
-          </div>
-          <pre class="example-detail-prompt" id="example-detail-prompt"></pre>
-          <div class="example-detail-actions">
-            <button class="secondary-button" id="cancel-example-detail-button" type="button">关闭</button>
-            <button class="primary-button compact" id="use-example-button" type="button">使用此样例</button>
-          </div>
-        </div>
-      </section>
-    </div>
-
     <div class="drawer-backdrop hidden" id="request-log-overlay">
       <aside class="request-log-drawer" role="dialog" aria-modal="true" aria-label="请求日志">
         <div class="request-log-drawer-heading">
@@ -637,7 +591,6 @@
     <div class="toast-region" id="toast-region" aria-live="polite"></div>
 
     <script src="../shared/validation.js"></script>
-    <script src="../shared/presets.js"></script>
     <script src="../shared/mask-model.js"></script>
     <script src="./app.js"></script>
   </body>

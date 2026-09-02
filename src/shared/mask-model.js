@@ -20,11 +20,16 @@
 
     return {
       strokes,
-      addStroke(stroke) {
-        if (!stroke || !Array.isArray(stroke.points) || !stroke.points.length) return;
-        strokes.push(stroke);
+      // 通用动作入栈：笔画（{points:[...]}）与选区应用（{type:"selection", ...}）混编同一撤销栈。
+      addAction(action) {
+        if (!action || typeof action !== "object") return;
+        strokes.push(action);
         if (strokes.length > MASK_MAX_STEPS) strokes.shift();
         redoStack.length = 0;
+      },
+      addStroke(stroke) {
+        if (!stroke || !Array.isArray(stroke.points) || !stroke.points.length) return;
+        this.addAction(stroke);
       },
       undo() {
         const stroke = strokes.pop();

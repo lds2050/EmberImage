@@ -52,8 +52,8 @@ function loadAppIcon() {
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1480,
-    height: 960,
+    width: 1360,
+    height: 900,
     minWidth: 900,
     minHeight: 600,
     title: "EmberImage",
