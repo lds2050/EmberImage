@@ -3162,6 +3162,45 @@ summary:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* 选区工具组（v0.5.3 工具箱） */
+.mask-wand-options {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mask-editor-toolbar .segmented-control button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.mask-selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 8px 12px;
+  background: rgba(77, 154, 255, 0.1);
+  border: 1px solid rgba(77, 154, 255, 0.28);
+  border-radius: 12px;
+}
+
+.mask-selection-hint {
+  color: #a8b6cc;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.mask-selection-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.mask-selection-actions .primary-button {
+  padding: 6px 14px;
+}
+
 .mask-editor-actions,
 .mask-editor-view {
   display: flex;

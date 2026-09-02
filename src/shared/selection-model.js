@@ -28,6 +28,25 @@
     return Math.max(FEATHER_MIN, Math.min(FEATHER_MAX, value));
   }
 
+  // 纯函数：解码序列化状态（runs 行程编码）为二值蒙版。
+  // 供渲染层/导出层重建"已应用为 Mask"的选区动作；state 无效时返回 null。
+  function decodeSelectionRuns(state, size) {
+    const total = Math.max(0, size | 0);
+    if (!state || !Array.isArray(state.runs) || state.runs.length < 2) return null;
+    const out = new Uint8Array(total);
+    let cursor = 0;
+    let value = state.runs[0] ? 1 : 0;
+    for (let r = 1; r < state.runs.length; r += 1) {
+      const length = state.runs[r] | 0;
+      if (length < 0 || cursor + length > total) return null;
+      if (value) out.fill(1, cursor, cursor + length);
+      cursor += length;
+      value = value ? 0 : 1;
+    }
+    if (cursor !== total) return null;
+    return out;
+  }
+
   // 选区会话：持有全尺寸二值蒙版（0/1）与羽化半径；羽化在"应用为 Mask"时产出 0..255 Alpha。
   function createSelectionSession(width, height, options) {
     const opts = options || {};
@@ -126,18 +145,8 @@
       deserialize(state) {
         if (!state || state.version !== SELECTION_SERIALIZE_VERSION) return false;
         if ((state.width | 0) !== (width | 0) || (state.height | 0) !== (height | 0)) return false;
-        if (!Array.isArray(state.runs) || state.runs.length < 2) return false;
-        const restored = new Uint8Array(size);
-        let cursor = 0;
-        let value = state.runs[0] ? 1 : 0;
-        for (let r = 1; r < state.runs.length; r += 1) {
-          const length = state.runs[r] | 0;
-          if (length < 0 || cursor + length > size) return false;
-          if (value) restored.fill(1, cursor, cursor + length);
-          cursor += length;
-          value = value ? 0 : 1;
-        }
-        if (cursor !== size) return false;
+        const restored = decodeSelectionRuns(state, size);
+        if (!restored) return false;
         baseMask = restored;
         featherRadius = clampFeather(state.featherRadius);
         return true;
@@ -151,5 +160,6 @@
     FEATHER_MIN,
     SELECTION_SERIALIZE_VERSION,
     createSelectionSession,
+    decodeSelectionRuns,
   };
 });

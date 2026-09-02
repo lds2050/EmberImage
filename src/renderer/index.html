@@ -558,21 +558,49 @@
             <button type="button" data-value="brush" class="active">画笔</button>
             <button type="button" data-value="eraser">橡皮擦</button>
           </div>
-          <label class="mask-brush-size">
+          <div class="segmented-control" id="mask-selection-tool-control">
+            <button type="button" data-value="wand">魔棒</button>
+            <button type="button" data-value="lasso">套索</button>
+          </div>
+          <label class="mask-brush-size" id="mask-brush-size-field">
             <span>大小</span>
             <input id="mask-brush-range" type="range" min="10" max="300" value="80" />
             <strong id="mask-brush-value">80</strong>
           </label>
+          <div class="mask-wand-options hidden" id="mask-wand-options">
+            <label class="mask-brush-size">
+              <span>容差</span>
+              <input id="mask-wand-tolerance-range" type="range" min="0" max="128" value="32" />
+              <strong id="mask-wand-tolerance-value">32</strong>
+            </label>
+            <div class="segmented-control" id="mask-wand-scope-control">
+              <button type="button" data-value="contiguous" class="active">连续</button>
+              <button type="button" data-value="global">全图</button>
+            </div>
+          </div>
+          <label class="mask-brush-size hidden" id="mask-feather-field">
+            <span>羽化</span>
+            <input id="mask-feather-range" type="range" min="0" max="20" value="2" />
+            <strong id="mask-feather-value">2</strong>
+          </label>
           <div class="mask-editor-actions">
             <button class="ghost-button" id="mask-undo-button" type="button">撤销</button>
             <button class="ghost-button" id="mask-redo-button" type="button">重做</button>
-            <button class="ghost-button" id="mask-invert-button" type="button" aria-pressed="false">反选</button>
+            <button class="ghost-button" id="mask-invert-button" type="button" aria-pressed="false">反选蒙版</button>
             <button class="ghost-button danger" id="mask-clear-canvas-button" type="button">清空</button>
           </div>
           <div class="mask-editor-view">
             <button class="ghost-button" id="mask-preview-toggle" type="button" aria-pressed="true">叠加预览</button>
             <button class="ghost-button" id="mask-fit-button" type="button">适合窗口</button>
             <button class="ghost-button" id="mask-100-button" type="button">100%</button>
+          </div>
+        </div>
+        <div class="mask-selection-bar hidden" id="mask-selection-bar">
+          <span class="mask-selection-hint">选区：Shift 加选 · Alt 减选 · Esc 取消 · Delete 应用为 Mask</span>
+          <div class="mask-selection-actions">
+            <button class="ghost-button" id="mask-selection-invert-button" type="button" disabled>反选选区</button>
+            <button class="ghost-button" id="mask-selection-cancel-button" type="button" disabled>取消选区</button>
+            <button class="primary-button compact" id="mask-selection-apply-button" type="button" disabled>应用为 Mask</button>
           </div>
         </div>
         <div class="mask-editor-stage" id="mask-editor-stage">
@@ -591,7 +619,9 @@
     <div class="toast-region" id="toast-region" aria-live="polite"></div>
 
     <script src="../shared/validation.js"></script>
+    <script src="../shared/algorithms.js"></script>
     <script src="../shared/mask-model.js"></script>
+    <script src="../shared/selection-model.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>

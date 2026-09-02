@@ -4,6 +4,8 @@
   const api = window.imageStudio;
   const Validation = window.ImageStudioValidation;
   const MaskModel = window.EmberImageMaskModel;
+  const Algorithms = window.EmberImageAlgorithms;
+  const SelectionModel = window.EmberImageSelectionModel;
   const $ = (selector) => document.querySelector(selector);
   const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -1099,7 +1101,392 @@
     spaceDown: false,
     panning: null,
     overlay: document.createElement("canvas"),
+    // 选区工具状态（v0.5.3 工具箱）
+    selectionSession: null,
+    selectionCanvas: document.createElement("canvas"),
+    selectionBoundary: null,
+    selectionBusy: false,
+    wandTolerance: 32,
+    wandContiguous: true,
+    antsTimer: null,
+    antsTick: 0,
+    bitmapData: null,
+    lasso: null,
   };
+
+  // ---- 选区计算调度：Worker 优先，初始化失败/崩溃/超时自动降级主线程 ----
+  const selectionCompute = {
+    worker: null,
+    broken: false,
+    warned: false,
+    pending: new Map(),
+    nextId: 0,
+  };
+
+  function ensureSelectionWorker() {
+    if (selectionCompute.broken || selectionCompute.worker) return selectionCompute.worker;
+    try {
+      selectionCompute.worker = new Worker("workers/selection.worker.js");
+      selectionCompute.worker.onmessage = (event) => {
+        const { id, ok, mask, error } = event.data || {};
+        const task = selectionCompute.pending.get(id);
+        if (!task) return;
+        selectionCompute.pending.delete(id);
+        clearTimeout(task.timer);
+        if (ok) task.resolve(mask);
+        else task.reject(new Error(error || "选区计算失败"));
+      };
+      selectionCompute.worker.onerror = () => { teardownSelectionWorker(); };
+    } catch {
+      selectionCompute.broken = true;
+    }
+    return selectionCompute.worker;
+  }
+
+  function teardownSelectionWorker() {
+    const worker = selectionCompute.worker;
+    selectionCompute.worker = null;
+    selectionCompute.broken = true;
+    if (worker) worker.terminate();
+    selectionCompute.pending.forEach(({ timer, reject }) => {
+      clearTimeout(timer);
+      reject(new Error("worker-unavailable"));
+    });
+    selectionCompute.pending.clear();
+    if (!selectionCompute.warned) {
+      selectionCompute.warned = true;
+      toast("性能模式：大图选区操作可能卡顿");
+    }
+  }
+
+  function computeSelectionOnMainThread(op, payload) {
+    const bitmap = maskEditor.bitmapData ? maskEditor.bitmapData.data : null;
+    if (op === "floodFill") {
+      return Algorithms.floodFill(bitmap, maskEditor.imgW, maskEditor.imgH, payload.x, payload.y, payload.tolerance, { contiguous: payload.contiguous !== false });
+    }
+    if (op === "fillPolygon") {
+      return Algorithms.fillPolygon(payload.points, payload.width, payload.height);
+    }
+    if (op === "subjectMask") {
+      return Algorithms.subjectMask(bitmap, maskEditor.imgW, maskEditor.imgH, payload.tolerance, payload);
+    }
+    throw new Error(`未知选区操作：${op}`);
+  }
+
+  function runSelection(op, payload) {
+    return new Promise((resolve, reject) => {
+      const worker = ensureSelectionWorker();
+      if (!worker) {
+        setTimeout(() => {
+          try { resolve(computeSelectionOnMainThread(op, payload)); }
+          catch (error) { reject(error); }
+        }, 0);
+        return;
+      }
+      const id = `sel-${selectionCompute.nextId += 1}`;
+      const timer = setTimeout(() => {
+        selectionCompute.pending.delete(id);
+        teardownSelectionWorker();
+        reject(new Error("选区计算超时，请降低容差或使用套索"));
+      }, 5000);
+      selectionCompute.pending.set(id, { timer, resolve, reject });
+      worker.postMessage({ id, op, payload });
+    });
+  }
+
+  // 编辑器打开时把主图原始尺寸 RGBA 位图同步给 Worker（独立副本转移所有权）。
+  function syncSelectionBitmap() {
+    if (!maskEditor.baseImage || !maskEditor.imgW || !maskEditor.imgH) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = maskEditor.imgW;
+    canvas.height = maskEditor.imgH;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(maskEditor.baseImage, 0, 0, canvas.width, canvas.height);
+    maskEditor.bitmapData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const worker = ensureSelectionWorker();
+    if (worker) {
+      const copy = new Uint8Array(maskEditor.bitmapData.data);
+      worker.postMessage({
+        id: `sel-${selectionCompute.nextId += 1}`,
+        op: "setBitmap",
+        payload: { bitmap: copy.buffer, width: canvas.width, height: canvas.height },
+      }, [copy.buffer]);
+    }
+  }
+
+  function selectionActive() {
+    return Boolean(maskEditor.selectionSession) && !maskEditor.selectionSession.isEmpty();
+  }
+
+  function isSelectionTool() {
+    return maskEditor.tool === "wand" || maskEditor.tool === "lasso";
+  }
+
+  function resetSelectionLayer() {
+    maskEditor.selectionCanvas.width = 0;
+    maskEditor.selectionCanvas.height = 0;
+    maskEditor.selectionBoundary = null;
+  }
+
+  function startSelectionAnts() {
+    if (maskEditor.antsTimer) return;
+    maskEditor.antsTimer = setInterval(() => {
+      maskEditor.antsTick = (maskEditor.antsTick + 1) % 4096;
+      if (maskEditor.open && selectionActive()) drawMaskEditor();
+    }, 130);
+  }
+
+  function stopSelectionAnts() {
+    if (maskEditor.antsTimer) {
+      clearInterval(maskEditor.antsTimer);
+      maskEditor.antsTimer = null;
+    }
+  }
+
+  // 全尺寸选区蒙版 → 视图分辨率填充层（蓝色半透明）+ 边界位图（蚂蚁线）。
+  function rebuildSelectionLayer() {
+    const canvas = maskEditor.selectionCanvas;
+    if (!selectionActive()) {
+      resetSelectionLayer();
+      return;
+    }
+    const viewW = Math.max(1, Math.round(maskEditor.imgW * maskEditor.viewScale));
+    const viewH = Math.max(1, Math.round(maskEditor.imgH * maskEditor.viewScale));
+    if (canvas.width !== viewW || canvas.height !== viewH) {
+      canvas.width = viewW;
+      canvas.height = viewH;
+    }
+    const mask = maskEditor.selectionSession.getMask();
+    const imgW = maskEditor.imgW;
+    const imgH = maskEditor.imgH;
+    const ctx = canvas.getContext("2d");
+    const image = ctx.createImageData(viewW, viewH);
+    const px = image.data;
+    const view = new Uint8Array(viewW * viewH);
+    for (let vy = 0; vy < viewH; vy += 1) {
+      const sy = Math.min(imgH - 1, Math.floor((vy * imgH) / viewH));
+      for (let vx = 0; vx < viewW; vx += 1) {
+        const sx = Math.min(imgW - 1, Math.floor((vx * imgW) / viewW));
+        if (!mask[sy * imgW + sx]) continue;
+        const vi = vy * viewW + vx;
+        view[vi] = 1;
+        const o = vi * 4;
+        px[o] = 77;
+        px[o + 1] = 154;
+        px[o + 2] = 255;
+        px[o + 3] = 255;
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+    const boundary = new Uint8Array(viewW * viewH);
+    for (let vy = 0; vy < viewH; vy += 1) {
+      for (let vx = 0; vx < viewW; vx += 1) {
+        const i = vy * viewW + vx;
+        if (!view[i]) continue;
+        const l = vx > 0 ? view[i - 1] : 0;
+        const r = vx < viewW - 1 ? view[i + 1] : 0;
+        const u = vy > 0 ? view[i - viewW] : 0;
+        const d = vy < viewH - 1 ? view[i + viewW] : 0;
+        if (!l || !r || !u || !d) boundary[i] = 1;
+      }
+    }
+    maskEditor.selectionBoundary = { width: viewW, height: viewH, data: boundary };
+  }
+
+  function applySelectionMask(mask, mode) {
+    if (!maskEditor.selectionSession) return;
+    if (mode === "add") maskEditor.selectionSession.addMask(mask);
+    else if (mode === "subtract") maskEditor.selectionSession.subtractMask(mask);
+    else maskEditor.selectionSession.setFromMask(mask);
+    rebuildSelectionLayer();
+    if (selectionActive()) startSelectionAnts();
+    else stopSelectionAnts();
+    updateSelectionToolUi();
+    drawMaskEditor();
+  }
+
+  async function handleWandClick(point, event) {
+    if (maskEditor.selectionBusy) return;
+    const mode = event.shiftKey ? "add" : event.altKey ? "subtract" : "replace";
+    maskEditor.selectionBusy = true;
+    updateSelectionToolUi();
+    try {
+      const mask = await runSelection("floodFill", {
+        x: Math.floor(point.x),
+        y: Math.floor(point.y),
+        tolerance: maskEditor.wandTolerance,
+        contiguous: maskEditor.wandContiguous,
+      });
+      applySelectionMask(mask, mode);
+    } catch (error) {
+      if (error && error.message === "worker-unavailable") {
+        try { applySelectionMask(computeSelectionOnMainThread("floodFill", { x: Math.floor(point.x), y: Math.floor(point.y), tolerance: maskEditor.wandTolerance, contiguous: maskEditor.wandContiguous }), mode); }
+        catch (inner) { toast(inner.message || "选区计算失败", "error"); }
+      } else {
+        toast(error.message || "选区计算失败", "error");
+      }
+    } finally {
+      maskEditor.selectionBusy = false;
+      updateSelectionToolUi();
+      drawMaskEditor();
+    }
+  }
+
+  async function finalizeLasso(event) {
+    const lasso = maskEditor.lasso;
+    maskEditor.lasso = null;
+    try { $("#mask-canvas").releasePointerCapture(event.pointerId); }
+    catch { /* Pointer was never captured. */ }
+    const points = Algorithms.simplifyPolyline(lasso.points, 2000);
+    if (points.length < 3) {
+      drawMaskEditor();
+      return;
+    }
+    maskEditor.selectionBusy = true;
+    updateSelectionToolUi();
+    try {
+      const mask = await runSelection("fillPolygon", { points, width: maskEditor.imgW, height: maskEditor.imgH });
+      applySelectionMask(mask, lasso.mode);
+    } catch (error) {
+      if (error && error.message === "worker-unavailable") {
+        try { applySelectionMask(computeSelectionOnMainThread("fillPolygon", { points, width: maskEditor.imgW, height: maskEditor.imgH }), lasso.mode); }
+        catch (inner) { toast(inner.message || "选区计算失败", "error"); }
+      } else {
+        toast(error.message || "选区计算失败", "error");
+      }
+    } finally {
+      maskEditor.selectionBusy = false;
+      updateSelectionToolUi();
+      drawMaskEditor();
+    }
+  }
+
+  function cancelSelection() {
+    if (!maskEditor.selectionSession) return;
+    maskEditor.selectionSession.clear();
+    resetSelectionLayer();
+    stopSelectionAnts();
+    updateSelectionToolUi();
+    drawMaskEditor();
+  }
+
+  function invertSelection() {
+    if (!selectionActive()) return;
+    maskEditor.selectionSession.invert();
+    rebuildSelectionLayer();
+    drawMaskEditor();
+  }
+
+  function applySelectionAsMask() {
+    if (!selectionActive() || maskEditor.selectionBusy) return;
+    // 应用时以羽化滑杆当前值为准（0 = 硬边界，序列化沿用 selection-model 的 runs 编码）。
+    const action = Object.assign({ type: "selection" }, maskEditor.selectionSession.serialize());
+    const feather = Number($("#mask-feather-range").value);
+    action.featherRadius = Number.isFinite(feather) ? Math.max(0, Math.min(20, Math.floor(feather))) : 2;
+    maskEditor.session.addAction(action);
+    maskEditor.selectionSession.clear();
+    resetSelectionLayer();
+    stopSelectionAnts();
+    maskEditor.tool = "brush";
+    selectSegment("#mask-tool-control", "brush");
+    selectSegment("#mask-selection-tool-control", "");
+    renderFullOverlay();
+    drawMaskEditor();
+    updateMaskEditorButtons();
+    updateSelectionToolUi();
+    toast("选区已应用为编辑区域");
+  }
+
+  function updateSelectionToolUi() {
+    const selecting = isSelectionTool();
+    const active = selectionActive();
+    const busy = maskEditor.selectionBusy;
+    $("#mask-brush-size-field").classList.toggle("hidden", selecting);
+    $("#mask-wand-options").classList.toggle("hidden", maskEditor.tool !== "wand");
+    $("#mask-feather-field").classList.toggle("hidden", !selecting);
+    $("#mask-selection-bar").classList.toggle("hidden", !selecting);
+    $$("#mask-tool-control button").forEach((button) => { button.disabled = active; });
+    ["#mask-selection-invert-button", "#mask-selection-cancel-button", "#mask-selection-apply-button"].forEach((id) => {
+      $(id).disabled = !active || busy;
+    });
+    const canvas = $("#mask-canvas");
+    if (canvas) canvas.style.cursor = selecting ? "crosshair" : "";
+  }
+
+  // ---- 已应用选区动作（type:"selection"）在覆盖层与导出层的重建 ----
+  const selectionViewCache = new WeakMap();
+
+  function selectionActionAlpha(action) {
+    if (!action || action.type !== "selection") return null;
+    const width = action.width | 0;
+    const height = action.height | 0;
+    if (width !== maskEditor.imgW || height !== maskEditor.imgH || width <= 0 || height <= 0) return null;
+    const binary = SelectionModel.decodeSelectionRuns(action, width * height);
+    if (!binary) return null;
+    const scaled = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) scaled[i] = binary[i] ? 255 : 0;
+    const radius = Math.floor(Number(action.featherRadius)) || 0;
+    if (radius === 0) return scaled;
+    return Algorithms.boxBlurChannel(scaled, width, height, radius, 1);
+  }
+
+  // 已应用选区 → 视图分辨率橙色覆盖层（按缩放比缓存，避免每次重绘全量模糊）。
+  function drawSelectionActionOn(ctx, action) {
+    let cache = selectionViewCache.get(action);
+    if (!cache || cache.scale !== maskEditor.viewScale) {
+      const alpha = selectionActionAlpha(action);
+      if (!alpha) return;
+      const width = action.width | 0;
+      const height = action.height | 0;
+      const viewW = Math.max(1, Math.round(width * maskEditor.viewScale));
+      const viewH = Math.max(1, Math.round(height * maskEditor.viewScale));
+      const canvas = document.createElement("canvas");
+      canvas.width = viewW;
+      canvas.height = viewH;
+      const c2d = canvas.getContext("2d");
+      const image = c2d.createImageData(viewW, viewH);
+      const px = image.data;
+      for (let vy = 0; vy < viewH; vy += 1) {
+        const sy = Math.min(height - 1, Math.floor((vy * height) / viewH));
+        for (let vx = 0; vx < viewW; vx += 1) {
+          const sx = Math.min(width - 1, Math.floor((vx * width) / viewW));
+          const a = alpha[sy * width + sx];
+          if (!a) continue;
+          const o = (vy * viewW + vx) * 4;
+          px[o] = 255;
+          px[o + 1] = 108;
+          px[o + 2] = 74;
+          px[o + 3] = a;
+        }
+      }
+      c2d.putImageData(image, 0, 0);
+      cache = { scale: maskEditor.viewScale, canvas };
+      selectionViewCache.set(action, cache);
+    }
+    ctx.drawImage(cache.canvas, 0, 0);
+  }
+
+  // 导出：选区 Alpha（选中=255）映射为导出层透明度（255-A），destination-out 打洞，语义与笔画一致。
+  function paintSelectionExport(ctx, action) {
+    const alpha = selectionActionAlpha(action);
+    if (!alpha) return;
+    const width = action.width | 0;
+    const height = action.height | 0;
+    const temp = document.createElement("canvas");
+    temp.width = width;
+    temp.height = height;
+    const tctx = temp.getContext("2d");
+    const image = tctx.createImageData(width, height);
+    const px = image.data;
+    for (let i = 0; i < alpha.length; i += 1) {
+      const o = i * 4;
+      px[o + 3] = 255 - alpha[i];
+    }
+    tctx.putImageData(image, 0, 0);
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.drawImage(temp, 0, 0);
+    ctx.globalCompositeOperation = "source-over";
+  }
 
   function openMaskEditor() {
     if (state.creationMode !== "edit" || !state.editAssets.length || requestBusy() || maskEditor.open) return;
@@ -1118,13 +1505,21 @@
       maskEditor.previewOn = true;
       maskEditor.inverted = state.mask.inverted === true;
       maskEditor.drawing = null;
+      maskEditor.selectionSession = SelectionModel.createSelectionSession(maskEditor.imgW, maskEditor.imgH);
+      maskEditor.selectionBusy = false;
+      maskEditor.lasso = null;
+      stopSelectionAnts();
+      resetSelectionLayer();
       maskEditor.open = true;
       selectSegment("#mask-tool-control", "brush");
+      selectSegment("#mask-selection-tool-control", "");
       $("#mask-preview-toggle").setAttribute("aria-pressed", "true");
       $("#mask-invert-button").setAttribute("aria-pressed", String(maskEditor.inverted));
       $("#mask-editor-overlay").classList.remove("hidden");
       layoutMaskCanvas();
       updateMaskEditorButtons();
+      updateSelectionToolUi();
+      syncSelectionBitmap();
     };
     image.onerror = () => toast("无法载入主图", "error");
     image.src = base.originalUrl;
@@ -1135,6 +1530,11 @@
     maskEditor.drawing = null;
     maskEditor.session = null;
     maskEditor.panning = null;
+    maskEditor.lasso = null;
+    maskEditor.selectionSession = null;
+    maskEditor.selectionBusy = false;
+    stopSelectionAnts();
+    resetSelectionLayer();
     $("#mask-editor-overlay").classList.add("hidden");
   }
 
@@ -1161,6 +1561,7 @@
     maskEditor.overlay.width = width;
     maskEditor.overlay.height = height;
     renderFullOverlay();
+    rebuildSelectionLayer();
     drawMaskEditor();
   }
 
@@ -1209,7 +1610,10 @@
     const ctx = maskEditor.overlay.getContext("2d");
     ctx.clearRect(0, 0, maskEditor.overlay.width, maskEditor.overlay.height);
     if (!maskEditor.session) return;
-    for (const stroke of maskEditor.session.strokes) paintStrokeOn(ctx, stroke, maskEditor.viewScale, "overlay");
+    for (const action of maskEditor.session.strokes) {
+      if (action && action.type === "selection") drawSelectionActionOn(ctx, action);
+      else paintStrokeOn(ctx, action, maskEditor.viewScale, "overlay");
+    }
     if (liveStroke) paintStrokeOn(ctx, liveStroke, maskEditor.viewScale, "overlay");
     if (maskEditor.inverted) invertMaskCanvas(maskEditor.overlay);
   }
@@ -1223,6 +1627,36 @@
       ctx.globalAlpha = 0.55;
       ctx.drawImage(maskEditor.overlay, 0, 0);
       ctx.globalAlpha = 1;
+    }
+    // 活动选区：蓝色半透明填充 + 蚂蚁线边界
+    if (selectionActive()) {
+      ctx.globalAlpha = 0.32;
+      ctx.drawImage(maskEditor.selectionCanvas, 0, 0);
+      ctx.globalAlpha = 1;
+      const b = maskEditor.selectionBoundary;
+      if (b) {
+        const tick = maskEditor.antsTick;
+        for (let y = 0; y < b.height; y += 1) {
+          for (let x = 0; x < b.width; x += 1) {
+            if (!b.data[y * b.width + x]) continue;
+            ctx.fillStyle = ((x + y + tick) & 7) < 4 ? "rgba(255, 255, 255, 0.95)" : "rgba(28, 100, 220, 0.95)";
+            ctx.fillRect(x, y, 1, 1);
+          }
+        }
+      }
+    }
+    // 套索绘制中的路径预览
+    if (maskEditor.lasso && maskEditor.lasso.points.length > 1) {
+      ctx.save();
+      ctx.setLineDash([6, 4]);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
+      ctx.beginPath();
+      const pts = maskEditor.lasso.points;
+      ctx.moveTo(pts[0].x * maskEditor.viewScale, pts[0].y * maskEditor.viewScale);
+      for (let i = 1; i < pts.length; i += 1) ctx.lineTo(pts[i].x * maskEditor.viewScale, pts[i].y * maskEditor.viewScale);
+      ctx.stroke();
+      ctx.restore();
     }
   }
 
@@ -1276,6 +1710,19 @@
     const point = toImageCoords(event);
     if (!point) return;
     event.preventDefault();
+    if (maskEditor.tool === "wand") {
+      handleWandClick(point, event);
+      return;
+    }
+    if (maskEditor.tool === "lasso") {
+      $("#mask-canvas").setPointerCapture(event.pointerId);
+      maskEditor.lasso = {
+        points: [point],
+        mode: event.shiftKey ? "add" : event.altKey ? "subtract" : "replace",
+      };
+      drawMaskEditor();
+      return;
+    }
     $("#mask-canvas").setPointerCapture(event.pointerId);
     maskEditor.drawing = { tool: maskEditor.tool, radius: Number($("#mask-brush-range").value), points: [point] };
     if (maskEditor.inverted) renderFullOverlay(maskEditor.drawing);
@@ -1289,6 +1736,16 @@
       const stage = $("#mask-editor-stage");
       stage.scrollLeft = maskEditor.panning.scrollLeft - (event.clientX - maskEditor.panning.x);
       stage.scrollTop = maskEditor.panning.scrollTop - (event.clientY - maskEditor.panning.y);
+      return;
+    }
+    if (maskEditor.lasso) {
+      const point = toImageCoords(event);
+      if (!point) return;
+      const points = maskEditor.lasso.points;
+      const last = points[points.length - 1];
+      if (Math.abs(point.x - last.x) < 1 || Math.abs(point.y - last.y) < 1) return;
+      points.push(point);
+      drawMaskEditor();
       return;
     }
     if (!maskEditor.drawing) return;
@@ -1314,8 +1771,13 @@
     drawMaskEditor();
   }
 
-  function handleMaskPointerUp(event) {
+  async function handleMaskPointerUp(event) {
     if (maskEditor.panning) { maskEditor.panning = null; return; }
+    if (maskEditor.lasso) {
+      event.preventDefault();
+      await finalizeLasso(event);
+      return;
+    }
     if (!maskEditor.drawing || !maskEditor.session) return;
     try { $("#mask-canvas").releasePointerCapture(event.pointerId); }
     catch { /* Pointer was never captured. */ }
@@ -1338,7 +1800,10 @@
       const ctx = canvas.getContext("2d");
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      for (const stroke of maskEditor.session.strokes) paintStrokeOn(ctx, stroke, 1, "export");
+      for (const action of maskEditor.session.strokes) {
+        if (action && action.type === "selection") paintSelectionExport(ctx, action);
+        else paintStrokeOn(ctx, action, 1, "export");
+      }
       ctx.globalCompositeOperation = "source-over";
       if (maskEditor.inverted) invertMaskCanvas(canvas);
       const blob = await new Promise((resolve, reject) => canvas.toBlob((result) => (result ? resolve(result) : reject(new Error("导出失败"))), "image/png"));
@@ -1641,6 +2106,10 @@
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
+    if (maskEditor.open && selectionActive()) {
+      cancelSelection();
+      return;
+    }
     closeImageViewer();
     closeSizeDialog();
     closeMaskEditor();
@@ -1678,9 +2147,30 @@
   $("#open-mask-editor-button").addEventListener("click", openMaskEditor);
   $("#mask-redraw-button").addEventListener("click", openMaskEditor);
   $$("#mask-tool-control button").forEach((button) => button.addEventListener("click", () => {
+    if (selectionActive()) return;
     maskEditor.tool = button.dataset.value;
     selectSegment("#mask-tool-control", maskEditor.tool);
+    updateSelectionToolUi();
   }));
+  $$("#mask-selection-tool-control button").forEach((button) => button.addEventListener("click", () => {
+    maskEditor.tool = button.dataset.value;
+    selectSegment("#mask-selection-tool-control", maskEditor.tool);
+    updateSelectionToolUi();
+  }));
+  $("#mask-wand-tolerance-range").addEventListener("input", () => {
+    maskEditor.wandTolerance = Number($("#mask-wand-tolerance-range").value);
+    $("#mask-wand-tolerance-value").textContent = String(maskEditor.wandTolerance);
+  });
+  $$("#mask-wand-scope-control button").forEach((button) => button.addEventListener("click", () => {
+    maskEditor.wandContiguous = button.dataset.value !== "global";
+    selectSegment("#mask-wand-scope-control", button.dataset.value);
+  }));
+  $("#mask-feather-range").addEventListener("input", () => {
+    $("#mask-feather-value").textContent = $("#mask-feather-range").value;
+  });
+  $("#mask-selection-invert-button").addEventListener("click", invertSelection);
+  $("#mask-selection-cancel-button").addEventListener("click", cancelSelection);
+  $("#mask-selection-apply-button").addEventListener("click", applySelectionAsMask);
   $("#mask-brush-range").addEventListener("input", () => { $("#mask-brush-value").textContent = $("#mask-brush-range").value; });
   $("#mask-undo-button").addEventListener("click", undoMaskStroke);
   $("#mask-redo-button").addEventListener("click", redoMaskStroke);
@@ -1729,6 +2219,11 @@
   window.addEventListener("keydown", (event) => {
     if (!maskEditor.open) return;
     if (event.target && ["INPUT", "TEXTAREA"].includes(event.target.tagName)) return;
+    if ((event.key === "Delete" || event.key === "Backspace") && selectionActive()) {
+      event.preventDefault();
+      applySelectionAsMask();
+      return;
+    }
     if (event.key === "[" || event.key === "]") {
       event.preventDefault();
       const range = $("#mask-brush-range");

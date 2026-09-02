@@ -133,3 +133,31 @@ test("mask-model: addAction enforces the 50-step cap and clears redo", () => {
   assert.equal(session.canRedo(), false);
   assert.equal(session.strokes[session.strokes.length - 1].seq, 100);
 });
+
+test("decodeSelectionRuns: rebuilds binary mask from serialized runs", () => {
+  const width = 8;
+  const height = 4;
+  const session = selection.createSelectionSession(width, height);
+  const source = makeMask(width, height, (x) => x < 3);
+  session.setFromMask(source);
+
+  const decoded = selection.decodeSelectionRuns(session.serialize(), width * height);
+  assert.ok(decoded instanceof Uint8Array);
+  assert.deepEqual(Array.from(decoded), Array.from(source));
+
+  // 空选区：runs = [0, size]
+  const empty = selection.createSelectionSession(width, height);
+  const emptyDecoded = selection.decodeSelectionRuns(empty.serialize(), width * height);
+  assert.ok(emptyDecoded);
+  assert.equal(emptyDecoded.reduce((sum, v) => sum + v, 0), 0);
+});
+
+test("decodeSelectionRuns: rejects malformed states", () => {
+  assert.equal(selection.decodeSelectionRuns(null, 4), null);
+  assert.equal(selection.decodeSelectionRuns({}, 4), null);
+  assert.equal(selection.decodeSelectionRuns({ runs: [] }, 4), null);
+  assert.equal(selection.decodeSelectionRuns({ runs: [1] }, 4), null);
+  assert.equal(selection.decodeSelectionRuns({ runs: [1, 999] }, 4), null, "cursor overflow");
+  assert.equal(selection.decodeSelectionRuns({ runs: [0, 2, 1] }, 4), null, "cursor mismatch");
+  assert.equal(selection.decodeSelectionRuns({ runs: [0, -1, 5] }, 4), null, "negative run");
+});
