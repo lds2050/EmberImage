@@ -41,6 +41,10 @@ const openaiAdapter = {
     const data = Array.isArray(body?.data) ? body.data : [];
     return { images: data, text: null, usage: body?.usage || null };
   },
+
+  parseModels(body) {
+    return Array.isArray(body?.data) ? body.data.map((item) => item?.id).filter(Boolean) : [];
+  },
 };
 
 module.exports = openaiAdapter;

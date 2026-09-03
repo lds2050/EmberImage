@@ -399,21 +399,8 @@
                 <div class="form-grid">
                   <div class="form-field full">
                     <label>接口类型</label>
-                    <div class="provider-selector" id="provider-options">
-                      <button class="provider-option active" type="button" data-value="openai">
-                        <span class="provider-radio">✓</span>
-                        <span><strong>OpenAI 兼容</strong><small>gpt-image 系列与兼容中转。</small></span>
-                      </button>
-                      <button class="provider-option" type="button" data-value="seedream" disabled>
-                        <span class="provider-radio">✓</span>
-                        <span><strong>Seedream</strong><small>火山方舟 · 后续版本开放</small></span>
-                      </button>
-                      <button class="provider-option" type="button" data-value="gemini" disabled>
-                        <span class="provider-radio">✓</span>
-                        <span><strong>Gemini</strong><small>Google 生成内容接口 · 后续版本开放</small></span>
-                      </button>
-                    </div>
-                    <p class="field-help">Seedream 与 Gemini 将在 v0.6.0 后续版本开放；当前所有连接继续使用 OpenAI 兼容协议。</p>
+                    <div class="provider-selector" id="provider-options"></div>
+                    <p class="field-help" id="provider-hint">正在读取可用接口…</p>
                   </div>
                   <div class="form-field">
                     <label for="connection-name-input">连接名称</label>
@@ -488,6 +475,15 @@
                       <span class="capability-item">图片编辑 <strong id="edit-capability" class="cap-unknown">未知</strong></span>
                     </div>
                     <p class="field-help">按实际请求结果标记，测试连接不会改变状态；“不支持”仅为提示，仍可再次尝试。</p>
+                  </div>
+                  <div class="form-field full">
+                    <label>接口能力</label>
+                    <div class="capability-status">
+                      <span class="capability-item">文字生图 <strong id="cap-generation" class="cap-unknown">—</strong></span>
+                      <span class="capability-item">参考图编辑 <strong id="cap-reference" class="cap-unknown">—</strong></span>
+                      <span class="capability-item">Mask 局部编辑 <strong id="cap-mask" class="cap-unknown">—</strong></span>
+                    </div>
+                    <p class="field-help">由接口类型决定；与上面的实际调用状态互为补充。</p>
                   </div>
                 </div>
 

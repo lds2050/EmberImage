@@ -340,7 +340,7 @@ async function testConnection(connection = {}) {
   const baseUrl = assertSecureBaseUrl(profile.baseUrl);
 
   const provider = Providers.resolveProvider(profile);
-  const endpoint = provider.endpoints(baseUrl).models;
+  const endpoint = provider.endpoints(baseUrl, profile).models;
   const startedAt = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Math.min(validateTimeout(profile.requestTimeoutSeconds), 60) * 1000);
@@ -352,8 +352,8 @@ async function testConnection(connection = {}) {
     });
     const body = await readResponseBody(response);
     if (!response.ok && ![404, 405].includes(response.status)) throw apiErrorFromResponse(response, body);
-    const models = Array.isArray(body.data) ? body.data.map((item) => item.id) : [];
-    const modelVerified = models.includes(profile.model);
+    const models = provider.parseModels(body);
+    const modelVerified = models.includes(profile.model) || models.includes(String(profile.model).replace(/^models\//, ""));
     const result = {
       connected: true,
       modelVerified,
@@ -370,6 +370,32 @@ async function testConnection(connection = {}) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// Providers that return a single image per call (Gemini) are issued serially, so
+// usage across those calls has to be accumulated for the history record. Shapes
+// differ per provider, but a single profile always talks to one provider, so
+// summing same-named numeric fields is safe.
+function mergeUsage(current, next) {
+  if (!next) return current;
+  if (!current) return next;
+  const merged = { ...current };
+  for (const [key, value] of Object.entries(next)) {
+    if (typeof value === "number") merged[key] = (typeof merged[key] === "number" ? merged[key] : 0) + value;
+    else if (!(key in merged)) merged[key] = value;
+  }
+  return merged;
+}
+
+const BLOCK_REASON_MESSAGES = {
+  SAFETY: "模型判定本次内容违反安全策略，未返回图片",
+  PROHIBITED_CONTENT: "模型判定本次内容包含禁止内容，未返回图片",
+  RECITATION: "模型判定结果可能涉及背诵内容，未返回图片",
+  SPII: "模型判定本次内容涉及敏感个人信息，未返回图片",
+};
+
+function blockedReasonMessage(reason) {
+  return BLOCK_REASON_MESSAGES[reason] || `模型未返回图片（结束原因 ${reason}）`;
 }
 
 function detectImageFormat(bytes, fallback = "png") {
@@ -498,12 +524,11 @@ async function createGeneration(request, sender) {
 
     const baseUrl = assertSecureBaseUrl(profile.baseUrl);
     const provider = Providers.resolveProvider(profile);
-    const endpoint = provider.endpoints(baseUrl).generation;
-    const payload = provider.buildGenerationBody({ ...request.parameters, model: profile.model }, profile);
-    // Fallback body for relays that reject stream parameters (see isStreamParamRejected).
-    const nonStreamingPayload = { ...payload, stream: false };
-    delete nonStreamingPayload.partial_images;
-    let activePayload = payload;
+    const endpoint = provider.endpoints(baseUrl, profile).generation;
+    const requestedCount = Number(request.parameters.n) || 1;
+    // Providers capped to one image per call (Gemini) are issued serially until the
+    // requested count is met; the rest get everything in a single request.
+    const batchLimit = Number.isFinite(provider.batchLimit) ? Math.max(1, Math.floor(provider.batchLimit)) : Infinity;
     const controllerRecord = { controller: new AbortController(), reason: "cancelled" };
     generationControllers.set(taskId, controllerRecord);
     const startedAt = Date.now();
@@ -511,6 +536,9 @@ async function createGeneration(request, sender) {
     let responseStatus = null;
     let requestId = "";
     let streamFellBack = false;
+    let requestCount = 0;
+    let lastPayload = null;
+    let usage = null;
 
     const armTimeout = () => {
       if (timeout) clearTimeout(timeout);
@@ -521,6 +549,7 @@ async function createGeneration(request, sender) {
     };
 
     const sendGenerationRequest = async (requestPayload) => {
+      requestCount += 1;
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { ...provider.headers(apiKey), "Content-Type": "application/json", Accept: requestPayload.stream ? "text/event-stream" : "application/json" },
@@ -536,29 +565,48 @@ async function createGeneration(request, sender) {
 
     try {
       armTimeout();
-      let body;
-      try {
-        body = await sendGenerationRequest(activePayload);
-      } catch (error) {
-        if (!activePayload.stream || activePayload === nonStreamingPayload || !isStreamParamRejected(error)) throw error;
-        streamFellBack = true;
-        armTimeout();
-        if (!sender.isDestroyed()) sender.send("generation:notice", { taskId, message: "当前服务不支持流式生成参数，已自动改用普通模式" });
-        activePayload = nonStreamingPayload;
-        body = await sendGenerationRequest(activePayload);
+      const rawImages = [];
+      let remaining = requestedCount;
+      while (remaining > 0) {
+        const payload = provider.buildGenerationBody({ ...request.parameters, n: Math.min(batchLimit, remaining), model: profile.model }, profile);
+        // Fallback body for relays that reject stream parameters (see isStreamParamRejected).
+        const nonStreamingPayload = { ...payload, stream: false };
+        delete nonStreamingPayload.partial_images;
+        let activePayload = payload;
+        lastPayload = payload;
+        let body;
+        try {
+          body = await sendGenerationRequest(activePayload);
+        } catch (error) {
+          if (!activePayload.stream || !isStreamParamRejected(error)) throw error;
+          streamFellBack = true;
+          armTimeout();
+          if (!sender.isDestroyed()) sender.send("generation:notice", { taskId, message: "当前服务不支持流式生成参数，已自动改用普通模式" });
+          activePayload = nonStreamingPayload;
+          lastPayload = activePayload;
+          body = await sendGenerationRequest(activePayload);
+        }
+        const parsed = provider.parseResponse(body);
+        if (parsed.blocked) throw new AppError(blockedReasonMessage(parsed.blocked), { code: "content_blocked", requestId });
+        if (!parsed.images.length) throw new AppError("响应中没有可用的图片数据", { code: "invalid_response", requestId });
+        rawImages.push(...parsed.images);
+        usage = mergeUsage(usage, parsed.usage);
+        remaining = requestedCount - rawImages.length;
+        if (remaining > 0 && !sender.isDestroyed()) {
+          sender.send("generation:notice", { taskId, message: `已生成 ${rawImages.length} 张，继续生成剩余 ${remaining} 张` });
+        }
       }
-      if (!Array.isArray(body.data) || !body.data.length) throw new AppError("响应中没有可用的图片数据", { code: "invalid_response", requestId });
 
       const createdAt = new Date();
       const images = [];
-      for (let index = 0; index < body.data.length; index += 1) {
-        const item = body.data[index];
+      for (let index = 0; index < rawImages.length; index += 1) {
+        const item = rawImages[index];
         let bytes;
         if (item?.b64_json) bytes = Buffer.from(item.b64_json, "base64");
         else if (item?.url) bytes = await downloadCompatibleImage(item.url, controllerRecord.controller.signal);
         else throw new AppError(`第 ${index + 1} 张结果缺少 b64_json 或 url`, { code: "invalid_response" });
         if (!bytes.length) throw new AppError("API 返回了空图片", { code: "decode_error" });
-        const format = detectImageFormat(bytes, activePayload.output_format);
+        const format = detectImageFormat(bytes, request.parameters.outputFormat);
         const filename = `${timestampName(createdAt)}_${taskId.slice(-8)}_${index + 1}.${format === "jpeg" ? "jpg" : format}`;
         const filePath = await storage.writeResult(filename, bytes);
         images.push({ id: `${taskId}-${index}`, path: filePath, filename, format, mime: mimeForFormat(format), bytes: bytes.length });
@@ -568,19 +616,31 @@ async function createGeneration(request, sender) {
         id: taskId,
         createdAt: createdAt.toISOString(),
         durationMs: Date.now() - startedAt,
-        prompt: activePayload.prompt,
-        model: activePayload.model,
+        prompt: String(request.parameters.prompt || ""),
+        model: profile.model,
+        provider: provider.id,
         connectionId: profile.id,
         connectionName: profile.name,
         providerHost: new URL(baseUrl).host,
         favorite: false,
-        parameters: { size: activePayload.size, quality: activePayload.quality, n: activePayload.n, background: activePayload.background, outputFormat: activePayload.output_format, outputCompression: activePayload.output_compression ?? null, moderation: activePayload.moderation, stream: activePayload.stream },
+        parameters: {
+          size: request.parameters.size,
+          quality: request.parameters.quality,
+          n: rawImages.length,
+          background: request.parameters.background,
+          outputFormat: request.parameters.outputFormat,
+          outputCompression: request.parameters.outputCompression ?? null,
+          moderation: request.parameters.moderation,
+          // Records what actually went out: a stream fallback leaves the requested
+          // flag true while the successful retry was non-streaming.
+          stream: Boolean(lastPayload?.stream),
+        },
         requestId,
-        usage: body.usage || null,
+        usage,
         images,
       };
       await storage.addHistory(entry);
-      await addLog({ ...logBase(profile, "image_generation", endpoint), status: "success", httpStatus: responseStatus, durationMs: entry.durationMs, requestId, streamFallback: streamFellBack, request: requestDetails(profile, endpoint, "POST", activePayload), response: { imageCount: images.length, usage: body.usage || null }, imageCount: images.length });
+      await addLog({ ...logBase(profile, "image_generation", endpoint), status: "success", httpStatus: responseStatus, durationMs: entry.durationMs, requestId, streamFallback: streamFellBack, request: requestDetails(profile, endpoint, "POST", lastPayload), response: { imageCount: images.length, requestCount, usage }, imageCount: images.length });
       await setConnectionCapability(profile.id, "generationCapability", "supported");
       return hydrateEntry(entry);
     } catch (error) {
@@ -592,7 +652,7 @@ async function createGeneration(request, sender) {
         nextError.name = "AbortError";
         nextError.code = controllerRecord.reason;
       }
-      await addLog({ ...logBase(profile, "image_generation", endpoint), status: nextError.code === "cancelled" ? "cancelled" : "error", httpStatus: nextError.status || responseStatus, durationMs: Date.now() - startedAt, requestId: nextError.requestId || requestId, streamFallback: streamFellBack, request: requestDetails(profile, endpoint, "POST", activePayload), responseBody: nextError.detail || null, errorCode: nextError.code || "network_error", errorMessage: nextError.message });
+      await addLog({ ...logBase(profile, "image_generation", endpoint), status: nextError.code === "cancelled" ? "cancelled" : "error", httpStatus: nextError.status || responseStatus, durationMs: Date.now() - startedAt, requestId: nextError.requestId || requestId, streamFallback: streamFellBack, request: requestDetails(profile, endpoint, "POST", lastPayload), responseBody: nextError.detail || null, errorCode: nextError.code || "network_error", errorMessage: nextError.message });
       throw nextError;
     } finally {
       clearTimeout(timeout);
@@ -794,8 +854,14 @@ async function createEdit(request, sender) {
 
     const baseUrl = assertSecureBaseUrl(profile.baseUrl);
     const provider = Providers.resolveProvider(profile);
-    const metadata = provider.buildEditMetadata({ ...request.parameters, model: profile.model, imageCount: assets.length });
-    const endpoint = provider.endpoints(baseUrl).edit;
+    // Only the OpenAI-compatible protocol has a mask channel; the others would
+    // silently ignore the mask and return a full-image edit.
+    if (maskAsset && !provider.capabilities.maskEdit) {
+      throw new AppError(`${provider.label || "当前接口"}不支持 Mask 局部编辑，请改用整体编辑，或切换到 OpenAI 兼容接口`, { code: "mask_unsupported" });
+    }
+    const endpoint = provider.endpoints(baseUrl, profile).edit;
+    const requestedCount = Number(request.parameters.n) || 1;
+    const batchLimit = Number.isFinite(provider.batchLimit) ? Math.max(1, Math.floor(provider.batchLimit)) : Infinity;
 
     const controllerRecord = { controller: new AbortController(), reason: "cancelled" };
     generationControllers.set(taskId, controllerRecord);
@@ -807,10 +873,9 @@ async function createEdit(request, sender) {
     let maskName = null;
     let logInputs = [];
     let logMask = null;
-    // Fallback metadata for relays that reject stream parameters (see isStreamParamRejected).
-    const nonStreamingMetadata = { ...metadata, stream: false };
-    delete nonStreamingMetadata.partial_images;
-    let activeMetadata = metadata;
+    let lastMetadata = null;
+    let requestCount = 0;
+    let usage = null;
     let streamFellBack = false;
 
     const armTimeout = () => {
@@ -822,10 +887,19 @@ async function createEdit(request, sender) {
     };
 
     const sendEditRequest = async (requestMetadata, inputFiles, maskFile) => {
+      requestCount += 1;
+      const body = provider.buildEditBody(requestMetadata, inputFiles, maskFile, profile);
+      // JSON adapters send the images inline; multipart bodies must keep the
+      // runtime-generated boundary, so Content-Type is only set for JSON.
+      const isJson = provider.editTransport === "json";
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { ...provider.headers(apiKey), Accept: requestMetadata.stream ? "text/event-stream" : "application/json" },
-        body: provider.buildEditBody(requestMetadata, inputFiles, maskFile),
+        headers: {
+          ...provider.headers(apiKey),
+          ...(isJson ? { "Content-Type": "application/json" } : {}),
+          Accept: requestMetadata.stream ? "text/event-stream" : "application/json",
+        },
+        body,
         signal: controllerRecord.controller.signal,
       });
       responseStatus = response.status;
@@ -877,29 +951,48 @@ async function createEdit(request, sender) {
       }
       const maskFile = maskName ? { buffer: await fs.readFile(path.join(tempDir, maskName)), name: "mask.png", mime: maskAsset.mime } : null;
 
-      let body;
-      try {
-        body = await sendEditRequest(activeMetadata, inputFiles, maskFile);
-      } catch (error) {
-        if (!activeMetadata.stream || activeMetadata === nonStreamingMetadata || !isStreamParamRejected(error)) throw error;
-        streamFellBack = true;
-        armTimeout();
-        if (!sender.isDestroyed()) sender.send("generation:notice", { taskId, message: "当前服务不支持流式生成参数，已自动改用普通模式" });
-        activeMetadata = nonStreamingMetadata;
-        body = await sendEditRequest(activeMetadata, inputFiles, maskFile);
+      const rawImages = [];
+      let remaining = requestedCount;
+      while (remaining > 0) {
+        const metadata = provider.buildEditMetadata({ ...request.parameters, n: Math.min(batchLimit, remaining), model: profile.model, imageCount: assets.length });
+        // Fallback metadata for relays that reject stream parameters (see isStreamParamRejected).
+        const nonStreamingMetadata = { ...metadata, stream: false };
+        delete nonStreamingMetadata.partial_images;
+        let activeMetadata = metadata;
+        lastMetadata = metadata;
+        let body;
+        try {
+          body = await sendEditRequest(activeMetadata, inputFiles, maskFile);
+        } catch (error) {
+          if (!activeMetadata.stream || !isStreamParamRejected(error)) throw error;
+          streamFellBack = true;
+          armTimeout();
+          if (!sender.isDestroyed()) sender.send("generation:notice", { taskId, message: "当前服务不支持流式生成参数，已自动改用普通模式" });
+          activeMetadata = nonStreamingMetadata;
+          lastMetadata = activeMetadata;
+          body = await sendEditRequest(activeMetadata, inputFiles, maskFile);
+        }
+        const parsed = provider.parseResponse(body);
+        if (parsed.blocked) throw new AppError(blockedReasonMessage(parsed.blocked), { code: "content_blocked", requestId });
+        if (!parsed.images.length) throw new AppError("响应中没有可用的图片数据", { code: "invalid_response", requestId });
+        rawImages.push(...parsed.images);
+        usage = mergeUsage(usage, parsed.usage);
+        remaining = requestedCount - rawImages.length;
+        if (remaining > 0 && !sender.isDestroyed()) {
+          sender.send("generation:notice", { taskId, message: `已生成 ${rawImages.length} 张，继续生成剩余 ${remaining} 张` });
+        }
       }
-      if (!Array.isArray(body.data) || !body.data.length) throw new AppError("响应中没有可用的图片数据", { code: "invalid_response", requestId });
 
       const createdAt = new Date();
       const images = [];
-      for (let index = 0; index < body.data.length; index += 1) {
-        const item = body.data[index];
+      for (let index = 0; index < rawImages.length; index += 1) {
+        const item = rawImages[index];
         let bytes;
         if (item?.b64_json) bytes = Buffer.from(item.b64_json, "base64");
         else if (item?.url) bytes = await downloadCompatibleImage(item.url, controllerRecord.controller.signal);
         else throw new AppError(`第 ${index + 1} 张结果缺少 b64_json 或 url`, { code: "invalid_response" });
         if (!bytes.length) throw new AppError("API 返回了空图片", { code: "decode_error" });
-        const format = detectImageFormat(bytes, activeMetadata.output_format);
+        const format = detectImageFormat(bytes, request.parameters.outputFormat);
         const filename = `${timestampName(createdAt)}_${taskId.slice(-8)}_${index + 1}.${format === "jpeg" ? "jpg" : format}`;
         const filePath = await storage.writeResult(filename, bytes);
         images.push({ id: `${taskId}-${index}`, path: filePath, filename, format, mime: mimeForFormat(format), bytes: bytes.length });
@@ -924,21 +1017,31 @@ async function createEdit(request, sender) {
         editMode: maskAsset ? "mask" : "full",
         createdAt: createdAt.toISOString(),
         durationMs: Date.now() - startedAt,
-        prompt: activeMetadata.prompt,
-        model: activeMetadata.model,
+        prompt: String(request.parameters.prompt || ""),
+        model: profile.model,
+        provider: provider.id,
         connectionId: profile.id,
         connectionName: profile.name,
         providerHost: new URL(baseUrl).host,
         favorite: false,
         inputs,
         mask: maskRecord,
-        parameters: { size: activeMetadata.size, quality: activeMetadata.quality, n: activeMetadata.n, background: activeMetadata.background, outputFormat: activeMetadata.output_format, outputCompression: activeMetadata.output_compression ?? null, moderation: activeMetadata.moderation, stream: activeMetadata.stream },
+        parameters: {
+          size: request.parameters.size,
+          quality: request.parameters.quality,
+          n: rawImages.length,
+          background: request.parameters.background,
+          outputFormat: request.parameters.outputFormat,
+          outputCompression: request.parameters.outputCompression ?? null,
+          moderation: request.parameters.moderation,
+          stream: Boolean(lastMetadata?.stream),
+        },
         requestId,
-        usage: body.usage || null,
+        usage,
         images,
       };
       await storage.addHistory(entry);
-      await addLog({ ...logBase(profile, "image_edit", endpoint), status: "success", httpStatus: responseStatus, durationMs: entry.durationMs, requestId, streamFallback: streamFellBack, request: editRequestDetails(profile, endpoint, activeMetadata, logInputs, logMask), response: { imageCount: images.length, usage: body.usage || null }, imageCount: images.length });
+      await addLog({ ...logBase(profile, "image_edit", endpoint), status: "success", httpStatus: responseStatus, durationMs: entry.durationMs, requestId, streamFallback: streamFellBack, request: editRequestDetails(profile, endpoint, lastMetadata, logInputs, logMask), response: { imageCount: images.length, requestCount, usage }, imageCount: images.length });
       await setConnectionCapability(profile.id, "editCapability", "supported");
       return hydrateEntry(entry);
     } catch (error) {
@@ -954,7 +1057,7 @@ async function createEdit(request, sender) {
         await setConnectionCapability(profile.id, "editCapability", "unsupported");
       }
       await storage.cleanTaskTempDir(taskId).catch(() => {});
-      await addLog({ ...logBase(profile, "image_edit", endpoint), status: nextError.code === "cancelled" ? "cancelled" : "error", httpStatus: nextError.status || responseStatus, durationMs: Date.now() - startedAt, requestId: nextError.requestId || requestId, streamFallback: streamFellBack, request: editRequestDetails(profile, endpoint, activeMetadata, logInputs, logMask), responseBody: nextError.detail || null, errorCode: nextError.code || "network_error", errorMessage: nextError.message });
+      await addLog({ ...logBase(profile, "image_edit", endpoint), status: nextError.code === "cancelled" ? "cancelled" : "error", httpStatus: nextError.status || responseStatus, durationMs: Date.now() - startedAt, requestId: nextError.requestId || requestId, streamFallback: streamFellBack, request: editRequestDetails(profile, endpoint, lastMetadata, logInputs, logMask), responseBody: nextError.detail || null, errorCode: nextError.code || "network_error", errorMessage: nextError.message });
       throw nextError;
     } finally {
       clearTimeout(timeout);
@@ -1096,7 +1199,11 @@ function registerIpcHandlers() {
     return { copied: true };
   }));
   ipcMain.handle("image:reveal", withResult(async (filePath) => { shell.showItemInFolder(assertResultPath(filePath)); return { revealed: true }; }));
-  ipcMain.handle("app:info", withResult(async () => ({ version: app.getVersion(), platform: process.platform })));
+  ipcMain.handle("app:info", withResult(async () => ({
+    version: app.getVersion(),
+    platform: process.platform,
+    providers: Providers.providerMeta(),
+  })));
 }
 
 app.whenReady().then(async () => {

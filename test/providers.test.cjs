@@ -50,10 +50,14 @@ test("resolveProvider defaults to openai for legacy profiles without the field",
   assert.equal(Providers.resolveProvider(null).id, "openai");
 });
 
-test("resolveProvider falls back to openai until seedream/gemini adapters register", () => {
-  // Stage B registers the seedream/gemini adapters; update this assertion then.
-  assert.equal(Providers.resolveProvider({ provider: "seedream" }).id, "openai");
-  assert.equal(Providers.resolveProvider({ provider: "gemini" }).id, "openai");
+test("resolveProvider returns the registered adapter for every known id", () => {
+  assert.equal(Providers.resolveProvider({ provider: "openai" }).id, "openai");
+  assert.equal(Providers.resolveProvider({ provider: "seedream" }).id, "seedream");
+  assert.equal(Providers.resolveProvider({ provider: "gemini" }).id, "gemini");
+});
+
+test("resolveProvider still falls back to openai for unknown ids", () => {
+  // Guards configs whose provider value predates (or falls outside) the whitelist.
   assert.equal(Providers.resolveProvider({ provider: "weird-value" }).id, "openai");
 });
 

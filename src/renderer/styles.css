@@ -2252,7 +2252,8 @@ summary:focus-visible {
 
 .connection-profile {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  /* status | name | active mark | draft tag */
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 9px;
   min-height: 58px;
@@ -2271,6 +2272,27 @@ summary:focus-visible {
   background: #3b3936;
   border-color: rgba(255, 108, 74, .68);
   box-shadow: inset 3px 0 var(--coral);
+}
+.connection-profile.editing {
+  color: #fff;
+  background: #3b3936;
+  border-color: #6a665e;
+}
+/* Unsaved connection: dashed so it reads as "not committed yet" beside saved rows. */
+.connection-profile.draft {
+  color: #fff;
+  background: #383634;
+  border-style: dashed;
+  border-color: #6a665e;
+  cursor: default;
+}
+.connection-profile.draft .profile-status { background: transparent; border: 1px dashed #85817a; }
+.profile-draft-tag {
+  padding: 2px 5px;
+  color: #e0ad44;
+  background: rgba(224, 173, 68, .12);
+  border-radius: 5px;
+  font-size: 8px;
 }
 
 .profile-status {

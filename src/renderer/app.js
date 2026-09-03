@@ -11,8 +11,14 @@
 
   const state = {
     config: { activeConnectionId: "", connections: [] },
+    // Provider metadata (labels, default endpoints, capabilities) comes from the main
+    // process so the UI never carries a second copy of those values.
+    providers: [],
     editingConnectionId: null,
     draftNew: false,
+    // Unsaved connection being edited. Lives outside state.config.connections so it
+    // never becomes the active connection, but is rendered in the list as a draft row.
+    draftProfile: null,
     keyStorage: "session",
     streamEnabled: false,
     sizeSelection: { mode: "ratio", ratio: "1:1", resolution: "1k", width: 1024, height: 1024 },
@@ -95,6 +101,7 @@
   }
 
   function editingProfile() {
+    if (state.draftProfile && state.draftProfile.id === state.editingConnectionId) return state.draftProfile;
     return state.config.connections.find((item) => item.id === state.editingConnectionId) || null;
   }
 
@@ -121,25 +128,38 @@
         ? "需要解锁并迁移一次"
         : profile.autoUnlockFailed ? "自动解密失败，请重新填写密钥" : "请填写 API Key";
     }
+    updateEditScopeAvailability();
     updateGenerationState();
+  }
+
+  function discardDraftProfile() {
+    state.draftProfile = null;
   }
 
   function renderConnectionProfiles() {
     const list = $("#connection-profile-list");
     list.innerHTML = "";
-    state.config.connections.forEach((profile) => {
+    const rows = state.config.connections.map((profile) => ({ profile, draft: false }));
+    if (state.draftProfile) rows.push({ profile: state.draftProfile, draft: true });
+
+    rows.forEach(({ profile, draft }) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = `connection-profile${profile.id === state.config.activeConnectionId ? " active" : ""}`;
-      const status = profile.isUnlocked ? "online" : profile.hasSavedKey ? "locked" : "";
+      const isActive = !draft && profile.id === state.config.activeConnectionId;
+      const isEditing = profile.id === state.editingConnectionId;
+      button.className = `connection-profile${isActive ? " active" : ""}${draft ? " draft" : ""}${isEditing && !isActive ? " editing" : ""}`;
+      const status = draft ? "" : profile.isUnlocked ? "online" : profile.hasSavedKey ? "locked" : "";
+      const subLabel = `${providerLabelFor(profile.provider)} · ${draft ? "尚未保存" : hostOf(profile.baseUrl)}`;
       button.innerHTML = `
         <span class="profile-status ${status}"></span>
-        <span><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(hostOf(profile.baseUrl))}</small></span>
-        <span class="profile-active-mark">${profile.id === state.config.activeConnectionId ? "✓" : ""}</span>`;
+        <span><strong>${escapeHtml(profile.name || "未命名连接")}</strong><small>${escapeHtml(subLabel)}</small></span>
+        <span class="profile-active-mark">${isActive ? "✓" : ""}</span>${draft ? '<span class="profile-draft-tag">草稿</span>' : ""}`;
       button.addEventListener("click", async () => {
+        if (draft) return;
         try {
           state.config = unwrap(await api.activateConnection(profile.id));
           state.draftNew = false;
+          discardDraftProfile();
           populateConnectionEditor(state.config.connections.find((item) => item.id === profile.id));
           renderConnectionProfiles();
           updateConnectionStatus();
@@ -149,16 +169,74 @@
     });
   }
 
+  // Keeps the draft row in sync with what the user types so the list never shows a
+  // stale name while the connection is still unsaved.
+  function syncDraftProfileFromEditor() {
+    if (!state.draftProfile) return;
+    const name = $("#connection-name-input").value.trim();
+    const baseUrl = $("#base-url-input").value.trim();
+    if (state.draftProfile.name === name && state.draftProfile.baseUrl === baseUrl) return;
+    state.draftProfile.name = name;
+    state.draftProfile.baseUrl = baseUrl;
+    renderConnectionProfiles();
+  }
+
   function setStorageChoice(value) {
     state.keyStorage = value === "encrypted" ? "encrypted" : "session";
     $$(".storage-option").forEach((button) => button.classList.toggle("active", button.dataset.value === state.keyStorage));
   }
 
-  function setProviderChoice(value) {
-    // seedream/gemini become selectable once their adapters ship (v0.6.0 stage B);
-    // anything unknown keeps the connection on the OpenAI-compatible protocol.
-    const provider = ["seedream", "gemini"].includes(value) ? value : "openai";
+  function providerMetaFor(id) {
+    return state.providers.find((item) => item.id === id) || null;
+  }
+
+  function providerLabelFor(id) {
+    return providerMetaFor(id)?.label || "OpenAI 兼容";
+  }
+
+  function renderProviderOptions() {
+    const container = $("#provider-options");
+    container.innerHTML = "";
+    state.providers.forEach((meta) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "provider-option";
+      button.dataset.value = meta.id;
+      button.innerHTML = `<span class="provider-radio">✓</span><span><strong>${escapeHtml(meta.label)}</strong><small>${escapeHtml(meta.summary)}</small></span>`;
+      button.addEventListener("click", () => setProviderChoice(meta.id, { applyDefaults: true }));
+      container.append(button);
+    });
+  }
+
+  // Prefills the endpoint and model only when the field still holds another
+  // provider's default, so switching types never erases a custom address.
+  function applyProviderDefaults(meta) {
+    const baseUrl = $("#base-url-input");
+    const model = $("#model-input");
+    const baseDefaults = state.providers.map((item) => item.defaultBaseUrl);
+    const modelDefaults = state.providers.map((item) => item.defaultModel);
+    if (!baseUrl.value.trim() || baseDefaults.includes(baseUrl.value.trim())) baseUrl.value = meta.defaultBaseUrl;
+    if (!model.value.trim() || modelDefaults.includes(model.value.trim())) model.value = meta.defaultModel;
+  }
+
+  function setProviderChoice(value, options = {}) {
+    const provider = providerMetaFor(value) ? value : "openai";
     $$("#provider-options .provider-option").forEach((button) => button.classList.toggle("active", button.dataset.value === provider));
+    const meta = providerMetaFor(provider);
+    if (!meta) return;
+    if (options.applyDefaults) applyProviderDefaults(meta);
+    $("#provider-hint").textContent = meta.hint;
+    updateProviderCapabilityDisplay(meta);
+  }
+
+  function updateProviderCapabilityDisplay(meta) {
+    const apply = (element, supported) => {
+      element.textContent = supported ? "支持" : "不支持";
+      element.className = supported ? "cap-supported" : "cap-unsupported";
+    };
+    apply($("#cap-generation"), meta?.capabilities?.generation !== false);
+    apply($("#cap-reference"), meta?.capabilities?.referenceEdit !== false);
+    apply($("#cap-mask"), meta?.capabilities?.maskEdit !== false);
   }
 
   function setStreamEnabled(enabled) {
@@ -190,12 +268,12 @@
       state.config = unwrap(await api.loadConfig());
       renderConnectionProfiles();
       updateConnectionStatus();
-      updateCapabilityDisplay(state.config.connections.find((item) => item.id === state.editingConnectionId));
+      updateCapabilityDisplay(editingProfile());
     } catch { /* 能力刷新失败不影响主流程 */ }
   }
 
-  function populateConnectionEditor(profile, options = {}) {
-    const draft = profile || {
+  function newDraftProfile(options) {
+    return {
       id: crypto.randomUUID(),
       name: options.official ? "OpenAI" : "新连接",
       provider: "openai",
@@ -206,7 +284,17 @@
       streamEnabled: false,
       hasSavedKey: false,
       isUnlocked: false,
+      generationCapability: "unknown",
+      editCapability: "unknown",
     };
+  }
+
+  function populateConnectionEditor(profile, options = {}) {
+    // An unsaved draft shows up in the left list right away. Reusing an existing
+    // draft keeps repeated "new connection" clicks from stacking empty rows.
+    const isCurrentDraft = Boolean(state.draftProfile) && profile === state.draftProfile;
+    const draft = profile || state.draftProfile || newDraftProfile(options);
+    state.draftProfile = profile && !isCurrentDraft ? null : draft;
     state.editingConnectionId = draft.id;
     state.draftNew = !profile;
     $("#connection-editor-title").textContent = state.draftNew ? "新建连接" : `编辑 ${draft.name}`;
@@ -227,6 +315,7 @@
     clearConnectionErrors();
     $("#connection-test-status").classList.add("hidden");
     updateCapabilityDisplay(profile);
+    renderConnectionProfiles();
   }
 
   function collectConnection() {
@@ -644,6 +733,20 @@
   function setUploadZoneBusy(busy) {
     $("#upload-zone").classList.toggle("busy", busy);
     updateUploadZoneLabel();
+  }
+
+  // Providers without mask editing (seedream/gemini) keep the mask button visible
+  // but disabled, with a hint pointing to an OpenAI-compatible connection.
+  function updateEditScopeAvailability() {
+    const profile = activeProfile();
+    const meta = profile ? providerMetaFor(profile.provider) : providerMetaFor("openai");
+    const supported = meta ? meta.capabilities?.maskEdit !== false : true;
+    const maskButton = $("#edit-scope-control button[data-value=\"mask\"]");
+    maskButton.disabled = !supported;
+    maskButton.title = supported ? "" : "当前接口类型暂不支持 Mask 局部编辑";
+    if (supported) return;
+    if (state.editScope === "mask") setEditScope("full");
+    $("#edit-scope-hint").textContent = "当前接口暂不支持局部编辑，切换到 OpenAI 兼容连接后可用";
   }
 
   function setEditScope(scope) {
@@ -2630,6 +2733,8 @@
     state.prompts = unwrap(promptsResult);
     const appInfo = unwrap(appInfoResult);
     $("#version-label").textContent = `V${appInfo.version}`;
+    state.providers = Array.isArray(appInfo.providers) ? appInfo.providers : [];
+    renderProviderOptions();
     renderConnectionProfiles();
     populateConnectionEditor(activeProfile());
     updateConnectionStatus();
@@ -2941,9 +3046,11 @@
 
   $("#add-connection-button").addEventListener("click", () => populateConnectionEditor(null));
   $("#official-template-button").addEventListener("click", () => populateConnectionEditor(null, { official: true }));
+  ["#connection-name-input", "#base-url-input"].forEach((selector) => {
+    $(selector).addEventListener("input", syncDraftProfileFromEditor);
+  });
   $("#stream-toggle").addEventListener("click", () => setStreamEnabled(!state.streamEnabled));
   $$(".storage-option").forEach((button) => button.addEventListener("click", () => setStorageChoice(button.dataset.value)));
-  $$("#provider-options .provider-option").forEach((button) => button.addEventListener("click", () => setProviderChoice(button.dataset.value)));
   $("#toggle-key-visibility").addEventListener("click", () => {
     const input = $("#api-key-input");
     input.type = input.type === "password" ? "text" : "password";
