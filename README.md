@@ -8,6 +8,7 @@
   <img src="https://img.shields.io/badge/runtime%20deps-zero-success?style=flat-square" alt="Zero runtime deps">
   <img src="https://img.shields.io/badge/models-GPT%20Image%20·%20Seedream%20·%20Gemini-brightgreen?style=flat-square" alt="Models">
   <img src="https://img.shields.io/badge/language-JavaScript-f1e05a?style=flat-square&logo=javascript" alt="Language">
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
 </p>
 
 **EmberImage** 是一个**本地优先**的 AI 图片生成桌面客户端。输入你自己的 API 地址与密钥，用图形界面完成文字生图与图片编辑——不经过任何第三方中转，你的提示词与图片只发往你配置的服务。
@@ -29,6 +30,25 @@
 | 📌 **提示词库** | 分类/搜索/收藏置顶/使用次数/批量管理，双向一键转存 |
 | 🌐 **多模型** | 同一界面切换 **OpenAI 兼容 / Seedream（火山方舟）/ Gemini** 三种接口 |
 | 🔐 **隐私优先** | 密钥仅本机、可 AES-256-GCM 加密落盘，API Key 永不写日志 |
+
+---
+
+## 界面预览
+
+<p align="center">
+  <img src="docs/screenshots/main-generate.png" alt="生成主界面" width="760">
+  <br><sub><b>文字生图</b> — 主界面：输入提示词即可生成，右侧画廊管理历史。</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/edit.png" alt="图片编辑界面" width="760">
+  <br><sub><b>图片编辑</b> — 拖入参考图并用自然语言改图，支持整体重绘、风格转换与多图合成。</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/connection-provider.png" alt="连接设置 · 接口类型" width="760">
+  <br><sub><b>多模型</b> — 连接编辑器可选接口类型，自动给出对应服务的默认地址、模型与能力说明。</sub>
+</p>
 
 ---
 
@@ -189,6 +209,9 @@ EmberImage 使用系统的 `userData` 目录。单条历史「删除」把对应
 
 - 完整维护与发布流程：[`docs/RELEASING.md`](docs/RELEASING.md)
 - 各版本更新说明：[`docs/releases/`](docs/releases/)
+- 路线图：[`docs/ROADMAP.md`](docs/ROADMAP.md)
+- 如何贡献：[`CONTRIBUTING.md`](CONTRIBUTING.md)
+- 开源协议：[MIT](LICENSE)
 
 ---
 

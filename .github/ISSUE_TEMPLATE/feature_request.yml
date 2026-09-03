@@ -1,0 +1,49 @@
+name: ✨ Feature request
+description: Suggest an idea for EmberImage
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing an idea! A clear description of the problem you're solving goes a long way.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What are you trying to do that the app doesn't currently support well?
+      placeholder: When I …, it's tedious because …
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: How would you expect the feature to work?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: Any workarounds or related approaches you've tried.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Relevant area
+      description: Pick anything this touches.
+      options:
+        - label: Text-to-image generation
+        - label: Image editing / Mask editing
+        - label: Provider adapters (OpenAI / Seedream / Gemini)
+        - label: UI / interactions
+        - label: Privacy / key storage
+        - label: Docs
+    validations:
+      required: false

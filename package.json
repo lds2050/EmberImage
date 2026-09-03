@@ -4,6 +4,7 @@
   "productName": "EmberImage",
   "description": "A local-first image generation desktop client for OpenAI-compatible APIs.",
   "author": "lds2050",
+  "license": "MIT",
   "homepage": "https://github.com/lds2050/EmberImage",
   "repository": {
     "type": "git",

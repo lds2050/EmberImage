@@ -1,0 +1,72 @@
+name: 🐛 Bug report
+description: Report a problem with EmberImage
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please fill in as much detail as you can — it helps us reproduce and fix it faster.
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Which EmberImage version are you running? (see sidebar of the app window)
+      placeholder: e.g. 0.6.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS Apple Silicon
+        - macOS Intel
+        - Windows 10/11 x64
+        - Other / from source
+    validations:
+      required: true
+
+  - type: dropdown
+    id: interface
+    attributes:
+      label: Interface type used
+      description: Which connection type does the problem occur with?
+      options:
+        - OpenAI-compatible
+        - Seedream (Volcengine Ark)
+        - Gemini
+        - Not sure / unrelated to a specific provider
+    validations:
+      required: false
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect to happen, and what actually happened instead?
+      placeholder: Expected… but instead…
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: The minimal steps that trigger the issue.
+      placeholder: |
+        1. Open Settings → New connection
+        2. Choose …
+        3. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / screenshots
+      description: Optional. Paste any relevant log lines or attach screenshots. Logs are scrubbed of API keys; still double-check nothing sensitive is included.
+    validations:
+      required: false

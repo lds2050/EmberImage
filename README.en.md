@@ -8,6 +8,7 @@
   <img src="https://img.shields.io/badge/runtime%20deps-zero-success?style=flat-square" alt="Zero runtime deps">
   <img src="https://img.shields.io/badge/models-GPT%20Image%20·%20Seedream%20·%20Gemini-brightgreen?style=flat-square" alt="Models">
   <img src="https://img.shields.io/badge/language-JavaScript-f1e05a?style=flat-square&logo=javascript" alt="Language">
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License">
 </p>
 
 **EmberImage** is a **local-first** desktop client for AI image generation. Bring your own API endpoint and key, then create images and edit pictures through a clean GUI — no third-party relay sits in between. Your prompts and images go **only** to the service you configured.
@@ -29,6 +30,25 @@ Built entirely with vanilla JavaScript (Electron 44, **zero runtime npm dependen
 | 📌 **Prompt library** | Categories / search / pinned favorites / usage stats / batch ops / one-click round-trip |
 | 🌐 **Multi-provider** | Switch **OpenAI-compatible / Seedream (Volcengine Ark) / Gemini** from one interface |
 | 🔐 **Privacy-first** | Keys stay local, optional AES-256-GCM at-rest encryption; API Key never touches logs |
+
+---
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/main-generate.png" alt="Generate (main) screen" width="760">
+  <br><sub><b>Text-to-image</b> — the main screen: type a prompt and generate; manage history in the gallery on the right.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/edit.png" alt="Image editing screen" width="760">
+  <br><sub><b>Image editing</b> — drop in reference images and edit with natural language: redraw, restyle, or compose from multiple images.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/connection-provider.png" alt="Connection · interface type" width="760">
+  <br><sub><b>Multi-provider</b> — pick an interface type in the connection editor; the app pre-fills the matching endpoint, model and capability hints.</sub>
+</p>
 
 ---
 
@@ -189,6 +209,9 @@ EmberImage uses the OS `userData` directory. Deleting a single history entry mov
 
 - Full maintenance & release process: [`docs/RELEASING.md`](docs/RELEASING.md)
 - Per-version changelogs: [`docs/releases/`](docs/releases/)
+- Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- How to contribute: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- License: [MIT](LICENSE)
 
 ---
 
