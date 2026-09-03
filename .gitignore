@@ -30,3 +30,4 @@ docs/HANDOFF-*.md
 
 # Local AI assistant workspace (memory, session state) — never enter Git.
 .workbuddy/
+overview.md
