@@ -1000,6 +1000,20 @@ function registerIpcHandlers() {
   }));
   ipcMain.handle("history:delete", withResult(async (id) => deleteHistoryEntry(String(id))));
   ipcMain.handle("history:clear", withResult(async () => { await storage.clearHistory(); return { cleared: true }; }));
+  ipcMain.handle("prompts:list", withResult(async () => storage.listPrompts()));
+  ipcMain.handle("prompts:add", withResult(async (payload) => storage.addPrompt({
+    text: typeof payload?.text === "string" ? payload.text : "",
+    category: typeof payload?.category === "string" ? payload.category : "",
+    sourceHistoryId: typeof payload?.sourceHistoryId === "string" ? payload.sourceHistoryId : null,
+  })));
+  ipcMain.handle("prompts:update", withResult(async (payload) => {
+    const changes = payload?.changes && typeof payload.changes === "object" ? payload.changes : {};
+    const patch = {};
+    if (typeof changes.text === "string") patch.text = changes.text;
+    if (typeof changes.category === "string") patch.category = changes.category;
+    return storage.updatePrompt(String(payload?.id), patch);
+  }));
+  ipcMain.handle("prompts:delete", withResult(async (id) => ({ deleted: await storage.removePrompt(String(id)) })));
   ipcMain.handle("logs:list", withResult(async () => storage.listLogs()));
   ipcMain.handle("logs:clear", withResult(async () => { await storage.clearLogs(); return { cleared: true }; }));
   ipcMain.handle("image:save", withResult(saveImage));

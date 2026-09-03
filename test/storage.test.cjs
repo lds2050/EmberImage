@@ -111,3 +111,49 @@ test("quarantines corrupt JSON instead of failing forever", async () => {
     assert.equal((await storage.listHistory()).length, 1);
   });
 });
+
+test("prompts: CRUD round trip with category normalization", async () => {
+  await withStorage(async (storage) => {
+    const added = await storage.addPrompt({ text: "  一只戴帽子的柴犬，胶片质感  ", category: "   ", sourceHistoryId: "history-1" });
+    assert.equal(added.text, "一只戴帽子的柴犬，胶片质感");
+    assert.equal(added.category, "未分类");
+    assert.equal(added.sourceHistoryId, "history-1");
+    assert.ok(added.id);
+    assert.ok(added.createdAt && added.updatedAt);
+
+    const updated = await storage.updatePrompt(added.id, { text: "两只柴犬", category: "  动物  " });
+    assert.equal(updated.text, "两只柴犬");
+    assert.equal(updated.category, "动物");
+    assert.equal(updated.createdAt, added.createdAt);
+    assert.ok(updated.updatedAt >= added.updatedAt);
+
+    assert.equal(await storage.updatePrompt("missing-id", { text: "x" }), null);
+
+    const trimmedCategory = await storage.addPrompt({ text: "t", category: "x".repeat(30) });
+    assert.equal(trimmedCategory.category, "x".repeat(24));
+
+    assert.equal((await storage.listPrompts()).length, 2);
+    assert.equal(await storage.removePrompt(added.id), true);
+    assert.equal(await storage.removePrompt(added.id), false);
+    assert.equal((await storage.listPrompts()).length, 1);
+  });
+});
+
+test("prompts: rejects empty text, enforces the 500 limit and quarantines corrupt files", async () => {
+  await withStorage(async (storage, directory) => {
+    await assert.rejects(() => storage.addPrompt({ text: "   " }), /正文不能为空/);
+
+    for (let index = 0; index < 500; index += 1) await storage.addPrompt({ text: `t-${index}` });
+    assert.equal((await storage.listPrompts()).length, 500);
+    await assert.rejects(() => storage.addPrompt({ text: "overflow" }), /已满/);
+
+    await fs.writeFile(path.join(directory, "prompts.json"), "{broken");
+    assert.deepEqual(await storage.listPrompts(), []);
+    const entries = await fs.readdir(directory);
+    assert.ok(entries.some((name) => name.startsWith("prompts.json.corrupt-")));
+
+    const recovered = await storage.addPrompt({ text: "after-recovery" });
+    assert.equal((await storage.listPrompts()).length, 1);
+    assert.equal(recovered.category, "未分类");
+  });
+});

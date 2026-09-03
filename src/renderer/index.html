@@ -30,6 +30,11 @@
             <span>画廊</span>
             <span class="nav-count" id="history-count">0</span>
           </button>
+          <button class="nav-item" type="button" data-view-target="prompts">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10a1 1 0 0 1 1 1v17l-6-4.2L6 21V4a1 1 0 0 1 1-1ZM9 8h6M9 12h4" /></svg>
+            <span>提示词</span>
+            <span class="nav-count" id="prompts-count">0</span>
+          </button>
           <button class="nav-item" type="button" data-view-target="settings">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1A7 7 0 0 0 14.8 6L14.5 3h-5L9.2 6a7 7 0 0 0-1.7 1.1l-2.4-1-2 3.4L5.1 11a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1A7 7 0 0 0 9.2 18l.3 3h5l.3-3a7 7 0 0 0 1.7-1.1l2.4 1 2-3.4-2-1.5a7 7 0 0 0 .1-1Z" /></svg>
             <span>设置</span>
@@ -335,6 +340,22 @@
           </div>
         </section>
 
+        <section class="view" id="view-prompts" data-view="prompts">
+          <div class="history-toolbar">
+            <span id="prompts-summary">共 0 条提示词</span>
+            <div class="history-toolbar-actions">
+              <button class="primary-button" id="add-prompt-button" type="button">新建提示词</button>
+            </div>
+          </div>
+          <div class="prompts-grid" id="prompts-list"></div>
+          <div class="history-empty hidden" id="prompts-empty">
+            <div>◇</div>
+            <h3>提示词库还是空的</h3>
+            <p>把好用的提示词沉淀在这里，随时一键取用。</p>
+            <button class="secondary-button" id="empty-add-prompt-button" type="button">新建提示词</button>
+          </div>
+        </section>
+
         <section class="view" id="view-settings" data-view="settings">
           <div class="settings-layout">
             <aside class="connection-library">
@@ -526,6 +547,30 @@
         <div class="size-dialog-actions">
           <button class="secondary-button" id="cancel-size-dialog-button" type="button">取消</button>
           <button class="primary-button compact" id="confirm-size-dialog-button" type="button">确定</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="size-dialog-backdrop hidden" id="prompt-dialog-overlay">
+      <section class="size-dialog prompt-dialog" role="dialog" aria-modal="true" aria-labelledby="prompt-dialog-title">
+        <div class="size-dialog-heading">
+          <div>
+            <h2 id="prompt-dialog-title">新建提示词</h2>
+            <p id="prompt-dialog-subtitle">正文必填，分类可选</p>
+          </div>
+          <button class="dialog-close-button" id="close-prompt-dialog-button" type="button" aria-label="关闭提示词编辑">×</button>
+        </div>
+        <div class="prompt-dialog-body">
+          <label class="prompt-dialog-label" for="prompt-dialog-text">正文</label>
+          <textarea id="prompt-dialog-text" rows="9" maxlength="32000" placeholder="描述想生成的画面或编辑指令…（⌘/Ctrl+Enter 保存）"></textarea>
+          <p class="prompt-dialog-error hidden" id="prompt-dialog-error"></p>
+          <label class="prompt-dialog-label" for="prompt-dialog-category">分类</label>
+          <input id="prompt-dialog-category" type="text" maxlength="24" list="prompt-category-options" placeholder="留空归入「未分类」" />
+          <datalist id="prompt-category-options"></datalist>
+        </div>
+        <div class="size-dialog-actions">
+          <button class="secondary-button" id="cancel-prompt-dialog-button" type="button">取消</button>
+          <button class="primary-button compact" id="save-prompt-dialog-button" type="button">保存</button>
         </div>
       </section>
     </div>

@@ -27,6 +27,26 @@ const DEFAULT_CONFIG = {
 const HISTORY_VERSION = 3;
 const HISTORY_LIMIT = 200;
 
+const PROMPTS_VERSION = 1;
+const PROMPTS_LIMIT = 500;
+const PROMPT_TEXT_LIMIT = 32000;
+const PROMPT_CATEGORY_LIMIT = 24;
+const PROMPT_DEFAULT_CATEGORY = "未分类";
+
+function normalizePromptEntry(entry) {
+  const item = entry && typeof entry === "object" ? entry : {};
+  const text = typeof item.text === "string" ? item.text.trim().slice(0, PROMPT_TEXT_LIMIT) : "";
+  const category = typeof item.category === "string" ? item.category.trim().slice(0, PROMPT_CATEGORY_LIMIT) : "";
+  return {
+    id: typeof item.id === "string" && item.id ? item.id : crypto.randomUUID(),
+    text,
+    category: category || PROMPT_DEFAULT_CATEGORY,
+    createdAt: typeof item.createdAt === "string" && item.createdAt ? item.createdAt : null,
+    updatedAt: typeof item.updatedAt === "string" && item.updatedAt ? item.updatedAt : null,
+    sourceHistoryId: typeof item.sourceHistoryId === "string" && item.sourceHistoryId ? item.sourceHistoryId : null,
+  };
+}
+
 function normalizeHistoryEntry(entry) {
   const item = entry && typeof entry === "object" ? entry : {};
   return {
@@ -43,6 +63,7 @@ class AppStorage {
     this.rootDirectory = rootDirectory;
     this.configPath = path.join(rootDirectory, "config.json");
     this.historyPath = path.join(rootDirectory, "history.json");
+    this.promptsPath = path.join(rootDirectory, "prompts.json");
     this.logsPath = path.join(rootDirectory, "request-logs.json");
     this.deviceKeyPath = path.join(rootDirectory, "device-encryption.key");
     this.resultsDirectory = path.join(rootDirectory, "results");
@@ -220,6 +241,55 @@ class AppStorage {
       entries[index] = { ...entries[index], ...changes };
       await this.writeJson(this.historyPath, { version: HISTORY_VERSION, entries });
       return entries[index];
+    });
+  }
+
+  async listPrompts() {
+    const stored = await this.readJson(this.promptsPath, null);
+    const entries = stored && Array.isArray(stored.entries) ? stored.entries : [];
+    return entries.map((entry) => normalizePromptEntry(entry));
+  }
+
+  async addPrompt(entry) {
+    return this.runExclusive(this.promptsPath, async () => {
+      const stored = await this.readJson(this.promptsPath, null);
+      const entries = stored && Array.isArray(stored.entries) ? stored.entries : [];
+      if (entries.length >= PROMPTS_LIMIT) throw new Error("提示词库已满（500 条），请先清理");
+      const normalized = normalizePromptEntry(entry);
+      if (!normalized.text) throw new Error("提示词正文不能为空");
+      const now = new Date().toISOString();
+      normalized.createdAt = normalized.createdAt || now;
+      normalized.updatedAt = now;
+      entries.unshift(normalized);
+      await this.writeJson(this.promptsPath, { version: PROMPTS_VERSION, entries });
+      return normalized;
+    });
+  }
+
+  async updatePrompt(id, changes) {
+    return this.runExclusive(this.promptsPath, async () => {
+      const stored = await this.readJson(this.promptsPath, null);
+      const entries = stored && Array.isArray(stored.entries) ? stored.entries : [];
+      const index = entries.findIndex((entry) => entry.id === id);
+      if (index < 0) return null;
+      const patch = changes && typeof changes === "object" ? changes : {};
+      const merged = normalizePromptEntry({ ...entries[index], ...patch, id: entries[index].id });
+      if (!merged.text) throw new Error("提示词正文不能为空");
+      merged.createdAt = entries[index].createdAt;
+      merged.updatedAt = new Date().toISOString();
+      entries[index] = merged;
+      await this.writeJson(this.promptsPath, { version: PROMPTS_VERSION, entries });
+      return merged;
+    });
+  }
+
+  async removePrompt(id) {
+    return this.runExclusive(this.promptsPath, async () => {
+      const stored = await this.readJson(this.promptsPath, null);
+      const entries = stored && Array.isArray(stored.entries) ? stored.entries : [];
+      const next = entries.filter((entry) => entry.id !== id);
+      await this.writeJson(this.promptsPath, { version: PROMPTS_VERSION, entries: next });
+      return next.length !== entries.length;
     });
   }
 

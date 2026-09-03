@@ -40,6 +40,8 @@
     viewerMaskOn: false,
     viewerWhich: "result",
     viewerRemoveBgAsset: null,
+    prompts: [],
+    editingPromptId: null,
   };
 
   function unwrap(result) {
@@ -80,6 +82,7 @@
     $$(".view").forEach((view) => view.classList.toggle("active", view.dataset.view === viewName));
     $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.viewTarget === viewName));
     if (viewName === "history") loadHistory();
+    if (viewName === "prompts") loadPrompts();
     if (viewName === "settings") loadLogs();
   }
 
@@ -2264,6 +2267,114 @@
     catch (error) { toast(error.message, "error"); }
   }
 
+  async function loadPrompts() {
+    try { state.prompts = unwrap(await api.listPrompts()); renderPrompts(); }
+    catch (error) { toast(error.message, "error"); }
+  }
+
+  function renderPrompts() {
+    $("#prompts-count").textContent = state.prompts.length;
+    $("#prompts-summary").textContent = `共 ${state.prompts.length} 条提示词`;
+    const list = $("#prompts-list");
+    list.innerHTML = "";
+    $("#prompts-empty").classList.toggle("hidden", state.prompts.length > 0);
+    list.classList.toggle("hidden", state.prompts.length === 0);
+    const sorted = [...state.prompts].sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+    $("#prompt-category-options").innerHTML = [...new Set(state.prompts.map((entry) => entry.category).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"))
+      .map((name) => `<option value="${escapeHtml(name)}"></option>`)
+      .join("");
+    sorted.forEach((entry) => {
+      const card = document.createElement("article");
+      card.className = "prompt-entry";
+      card.innerHTML = `
+        <p class="prompt-entry-text">${escapeHtml(entry.text)}</p>
+        <div class="prompt-entry-footer">
+          <span class="prompt-entry-category">${escapeHtml(entry.category || "未分类")}</span>
+          <span class="prompt-entry-time">${escapeHtml(formatDate(entry.updatedAt || entry.createdAt))}</span>
+          <button class="history-menu-button" type="button" aria-label="更多操作">···</button>
+        </div>
+        <div class="history-card-menu hidden">
+          <button type="button" data-action="use">用于生成</button>
+          <button type="button" data-action="edit">编辑</button>
+          <button class="danger" type="button" data-action="delete">删除</button>
+        </div>`;
+      const menu = card.querySelector(".history-card-menu");
+      const menuButton = card.querySelector(".history-menu-button");
+      menuButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const opening = menu.classList.contains("hidden");
+        $$(".history-card-menu").forEach((node) => node.classList.add("hidden"));
+        $$(".history-menu-button").forEach((node) => node.classList.remove("active"));
+        menu.classList.toggle("hidden", !opening);
+        menuButton.classList.toggle("active", opening);
+      });
+      menu.addEventListener("click", async (event) => {
+        const action = event.target.closest("button")?.dataset.action;
+        if (!action) return;
+        menu.classList.add("hidden");
+        if (action === "use") usePromptEntry(entry);
+        if (action === "edit") openPromptDialog(entry);
+        if (action === "delete" && window.confirm("删除这条提示词？")) {
+          try { unwrap(await api.deletePrompt(entry.id)); await loadPrompts(); toast("提示词已删除"); }
+          catch (error) { toast(error.message, "error"); }
+        }
+      });
+      list.append(card);
+    });
+  }
+
+  function usePromptEntry(entry) {
+    $("#prompt-input").value = entry.text || "";
+    updateGenerationState();
+    navigate("generate");
+    const promptInput = $("#prompt-input");
+    promptInput.focus();
+    promptInput.setSelectionRange(0, 0);
+    promptInput.scrollTop = 0;
+  }
+
+  function openPromptDialog(entry = null) {
+    state.editingPromptId = entry ? entry.id : null;
+    $("#prompt-dialog-title").textContent = entry ? "编辑提示词" : "新建提示词";
+    $("#prompt-dialog-text").value = entry ? entry.text : "";
+    $("#prompt-dialog-category").value = entry && entry.category !== "未分类" ? entry.category : "";
+    $("#prompt-dialog-error").classList.add("hidden");
+    $("#prompt-dialog-overlay").classList.remove("hidden");
+    $("#prompt-dialog-text").focus();
+  }
+
+  function closePromptDialog() {
+    $("#prompt-dialog-overlay").classList.add("hidden");
+    state.editingPromptId = null;
+  }
+
+  async function savePromptDialog() {
+    const text = $("#prompt-dialog-text").value.trim();
+    const errorNode = $("#prompt-dialog-error");
+    if (!text) {
+      errorNode.textContent = "正文不能为空";
+      errorNode.classList.remove("hidden");
+      return;
+    }
+    const category = $("#prompt-dialog-category").value.trim();
+    try {
+      if (state.editingPromptId) {
+        const updated = unwrap(await api.updatePrompt(state.editingPromptId, { text, category }));
+        if (!updated) throw new Error("这条提示词已被删除");
+        toast("提示词已更新");
+      } else {
+        unwrap(await api.addPrompt({ text, category, sourceHistoryId: null }));
+        toast("已存入提示词库");
+      }
+      closePromptDialog();
+      await loadPrompts();
+    } catch (error) {
+      errorNode.textContent = error.message;
+      errorNode.classList.remove("hidden");
+    }
+  }
+
   function logTypeLabel(type) {
     if (type === "connection_test") return "连接测试";
     if (type === "image_edit") return "图片编辑";
@@ -2317,15 +2428,17 @@
 
   async function initialize() {
     applyWindowScale();
-    const [configResult, historyResult, appInfoResult] = await Promise.all([api.loadConfig(), api.listHistory(), api.getAppInfo()]);
+    const [configResult, historyResult, promptsResult, appInfoResult] = await Promise.all([api.loadConfig(), api.listHistory(), api.listPrompts(), api.getAppInfo()]);
     state.config = unwrap(configResult);
     state.history = unwrap(historyResult);
+    state.prompts = unwrap(promptsResult);
     const appInfo = unwrap(appInfoResult);
     $("#version-label").textContent = `V${appInfo.version}`;
     renderConnectionProfiles();
     populateConnectionEditor(activeProfile());
     updateConnectionStatus();
     renderHistory();
+    renderPrompts();
     updateFormatDependencies();
     setCreationMode(localStorage.getItem("emberimage-creation-mode") === "edit" ? "edit" : "generate", { initial: true });
     updateGenerationState();
@@ -2337,7 +2450,7 @@
     hideAssetContextMenu();
   });
   document.addEventListener("click", (event) => {
-    if (!event.target.closest(".history-entry")) {
+    if (!event.target.closest(".history-entry, .prompt-entry")) {
       $$(".history-card-menu").forEach((node) => node.classList.add("hidden"));
       $$(".history-menu-button").forEach((node) => node.classList.remove("active"));
     }
@@ -2347,6 +2460,10 @@
     if (event.key !== "Escape") return;
     if (maskEditor.open && selectionActive()) {
       cancelSelection();
+      return;
+    }
+    if (!$("#prompt-dialog-overlay").classList.contains("hidden")) {
+      closePromptDialog();
       return;
     }
     if (!$("#bg-removal-overlay").classList.contains("hidden")) {
@@ -2414,6 +2531,20 @@
   $("#mask-selection-invert-button").addEventListener("click", invertSelection);
   $("#mask-selection-cancel-button").addEventListener("click", cancelSelection);
   $("#mask-selection-apply-button").addEventListener("click", applySelectionAsMask);
+  $("#add-prompt-button").addEventListener("click", () => openPromptDialog());
+  $("#empty-add-prompt-button").addEventListener("click", () => openPromptDialog());
+  $("#close-prompt-dialog-button").addEventListener("click", closePromptDialog);
+  $("#cancel-prompt-dialog-button").addEventListener("click", closePromptDialog);
+  $("#save-prompt-dialog-button").addEventListener("click", savePromptDialog);
+  $("#prompt-dialog-category").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); savePromptDialog(); }
+  });
+  $("#prompt-dialog-text").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); savePromptDialog(); }
+  });
+  $("#prompt-dialog-overlay").addEventListener("mousedown", (event) => {
+    if (event.target === event.currentTarget) closePromptDialog();
+  });
   $("#mask-auto-subject-button").addEventListener("click", autoSubjectSelection);
   $("#close-bg-removal-button").addEventListener("click", closeBgRemoval);
   $("#bg-removal-import-button").addEventListener("click", importBgRemovalAsAsset);
