@@ -139,6 +139,15 @@ async function readResponseBody(response) {
   catch { return { message: text.slice(0, 2000) }; }
 }
 
+// Some relay gateways strip or ignore the stream flag while still forwarding
+// partial_images, then reject with "partial_images requires stream=true".
+// Detect that specific 400 so the request can retry once without streaming.
+function isStreamParamRejected(error) {
+  if (error?.status !== 400 || typeof error?.message !== "string") return false;
+  if (/partial_images\s+requires\s+stream/i.test(error.message)) return true;
+  return /partial_images/i.test(error.message) && /stream/i.test(error.message);
+}
+
 function apiErrorFromResponse(response, body) {
   const apiError = body?.error || body || {};
   const message = apiError.message || `API 返回 HTTP ${response.status}`;
@@ -486,6 +495,10 @@ async function createGeneration(request, sender) {
 
     const baseUrl = assertSecureBaseUrl(profile.baseUrl);
     const payload = Validation.buildGenerationPayload({ ...request.parameters, model: profile.model });
+    // Fallback body for relays that reject stream parameters (see isStreamParamRejected).
+    const nonStreamingPayload = { ...payload, stream: false };
+    delete nonStreamingPayload.partial_images;
+    let activePayload = payload;
     const endpoint = Validation.generationEndpoint(baseUrl);
     const controllerRecord = { controller: new AbortController(), reason: "cancelled" };
     generationControllers.set(taskId, controllerRecord);
@@ -493,23 +506,43 @@ async function createGeneration(request, sender) {
     let timeout = null;
     let responseStatus = null;
     let requestId = "";
+    let streamFellBack = false;
 
-    try {
+    const armTimeout = () => {
+      if (timeout) clearTimeout(timeout);
       timeout = setTimeout(() => {
         controllerRecord.reason = "timeout";
         controllerRecord.controller.abort();
       }, validateTimeout(profile.requestTimeoutSeconds) * 1000);
+    };
+
+    const sendGenerationRequest = async (requestPayload) => {
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: payload.stream ? "text/event-stream" : "application/json" },
-        body: JSON.stringify(payload),
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: requestPayload.stream ? "text/event-stream" : "application/json" },
+        body: JSON.stringify(requestPayload),
         signal: controllerRecord.controller.signal,
       });
       responseStatus = response.status;
       requestId = getRequestId(response);
       if (!response.ok) throw apiErrorFromResponse(response, await readResponseBody(response));
       const contentType = response.headers.get("content-type") || "";
-      const body = payload.stream && contentType.includes("text/event-stream") ? await readStreamingImages(response, taskId, sender, payload.output_format) : await readResponseBody(response);
+      return requestPayload.stream && contentType.includes("text/event-stream") ? await readStreamingImages(response, taskId, sender, requestPayload.output_format) : await readResponseBody(response);
+    };
+
+    try {
+      armTimeout();
+      let body;
+      try {
+        body = await sendGenerationRequest(activePayload);
+      } catch (error) {
+        if (!activePayload.stream || activePayload === nonStreamingPayload || !isStreamParamRejected(error)) throw error;
+        streamFellBack = true;
+        armTimeout();
+        if (!sender.isDestroyed()) sender.send("generation:notice", { taskId, message: "当前服务不支持流式生成参数，已自动改用普通模式" });
+        activePayload = nonStreamingPayload;
+        body = await sendGenerationRequest(activePayload);
+      }
       if (!Array.isArray(body.data) || !body.data.length) throw new AppError("响应中没有可用的图片数据", { code: "invalid_response", requestId });
 
       const createdAt = new Date();
@@ -521,7 +554,7 @@ async function createGeneration(request, sender) {
         else if (item?.url) bytes = await downloadCompatibleImage(item.url, controllerRecord.controller.signal);
         else throw new AppError(`第 ${index + 1} 张结果缺少 b64_json 或 url`, { code: "invalid_response" });
         if (!bytes.length) throw new AppError("API 返回了空图片", { code: "decode_error" });
-        const format = detectImageFormat(bytes, payload.output_format);
+        const format = detectImageFormat(bytes, activePayload.output_format);
         const filename = `${timestampName(createdAt)}_${taskId.slice(-8)}_${index + 1}.${format === "jpeg" ? "jpg" : format}`;
         const filePath = await storage.writeResult(filename, bytes);
         images.push({ id: `${taskId}-${index}`, path: filePath, filename, format, mime: mimeForFormat(format), bytes: bytes.length });
@@ -531,19 +564,19 @@ async function createGeneration(request, sender) {
         id: taskId,
         createdAt: createdAt.toISOString(),
         durationMs: Date.now() - startedAt,
-        prompt: payload.prompt,
-        model: payload.model,
+        prompt: activePayload.prompt,
+        model: activePayload.model,
         connectionId: profile.id,
         connectionName: profile.name,
         providerHost: new URL(baseUrl).host,
         favorite: false,
-        parameters: { size: payload.size, quality: payload.quality, n: payload.n, background: payload.background, outputFormat: payload.output_format, outputCompression: payload.output_compression ?? null, moderation: payload.moderation, stream: payload.stream },
+        parameters: { size: activePayload.size, quality: activePayload.quality, n: activePayload.n, background: activePayload.background, outputFormat: activePayload.output_format, outputCompression: activePayload.output_compression ?? null, moderation: activePayload.moderation, stream: activePayload.stream },
         requestId,
         usage: body.usage || null,
         images,
       };
       await storage.addHistory(entry);
-      await addLog({ ...logBase(profile, "image_generation", endpoint), status: "success", httpStatus: responseStatus, durationMs: entry.durationMs, requestId, request: requestDetails(profile, endpoint, "POST", payload), response: { imageCount: images.length, usage: body.usage || null }, imageCount: images.length });
+      await addLog({ ...logBase(profile, "image_generation", endpoint), status: "success", httpStatus: responseStatus, durationMs: entry.durationMs, requestId, streamFallback: streamFellBack, request: requestDetails(profile, endpoint, "POST", activePayload), response: { imageCount: images.length, usage: body.usage || null }, imageCount: images.length });
       await setConnectionCapability(profile.id, "generationCapability", "supported");
       return hydrateEntry(entry);
     } catch (error) {
@@ -555,7 +588,7 @@ async function createGeneration(request, sender) {
         nextError.name = "AbortError";
         nextError.code = controllerRecord.reason;
       }
-      await addLog({ ...logBase(profile, "image_generation", endpoint), status: nextError.code === "cancelled" ? "cancelled" : "error", httpStatus: nextError.status || responseStatus, durationMs: Date.now() - startedAt, requestId: nextError.requestId || requestId, request: requestDetails(profile, endpoint, "POST", payload), responseBody: nextError.detail || null, errorCode: nextError.code || "network_error", errorMessage: nextError.message });
+      await addLog({ ...logBase(profile, "image_generation", endpoint), status: nextError.code === "cancelled" ? "cancelled" : "error", httpStatus: nextError.status || responseStatus, durationMs: Date.now() - startedAt, requestId: nextError.requestId || requestId, streamFallback: streamFellBack, request: requestDetails(profile, endpoint, "POST", activePayload), responseBody: nextError.detail || null, errorCode: nextError.code || "network_error", errorMessage: nextError.message });
       throw nextError;
     } finally {
       clearTimeout(timeout);
@@ -769,12 +802,36 @@ async function createEdit(request, sender) {
     let maskName = null;
     let logInputs = [];
     let logMask = null;
+    // Fallback metadata for relays that reject stream parameters (see isStreamParamRejected).
+    const nonStreamingMetadata = { ...metadata, stream: false };
+    delete nonStreamingMetadata.partial_images;
+    let activeMetadata = metadata;
+    let streamFellBack = false;
 
-    try {
+    const armTimeout = () => {
+      if (timeout) clearTimeout(timeout);
       timeout = setTimeout(() => {
         controllerRecord.reason = "timeout";
         controllerRecord.controller.abort();
       }, testTimeoutOverrideMs ?? validateTimeout(profile.requestTimeoutSeconds) * 1000);
+    };
+
+    const sendEditRequest = async (requestMetadata, inputFiles, maskFile) => {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, Accept: requestMetadata.stream ? "text/event-stream" : "application/json" },
+        body: buildEditFormData(requestMetadata, inputFiles, maskFile),
+        signal: controllerRecord.controller.signal,
+      });
+      responseStatus = response.status;
+      requestId = getRequestId(response);
+      if (!response.ok) throw apiErrorFromResponse(response, await readResponseBody(response));
+      const contentType = response.headers.get("content-type") || "";
+      return requestMetadata.stream && contentType.includes("text/event-stream") ? await readStreamingImages(response, taskId, sender, requestMetadata.output_format) : await readResponseBody(response);
+    };
+
+    try {
+      armTimeout();
       await storage.createTaskTempDir(taskId);
       const tempDir = path.join(storage.tmpDirectory, storage._safeSegment(taskId));
       for (let index = 0; index < assets.length; index += 1) {
@@ -814,19 +871,18 @@ async function createEdit(request, sender) {
         inputFiles.push({ buffer, name: `image-${index + 1}.${EDIT_MIME_EXT[copiedInputs[index].asset.mime] || "png"}`, mime: copiedInputs[index].asset.mime });
       }
       const maskFile = maskName ? { buffer: await fs.readFile(path.join(tempDir, maskName)), name: "mask.png", mime: maskAsset.mime } : null;
-      const form = buildEditFormData(metadata, inputFiles, maskFile);
 
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, Accept: metadata.stream ? "text/event-stream" : "application/json" },
-        body: form,
-        signal: controllerRecord.controller.signal,
-      });
-      responseStatus = response.status;
-      requestId = getRequestId(response);
-      if (!response.ok) throw apiErrorFromResponse(response, await readResponseBody(response));
-      const contentType = response.headers.get("content-type") || "";
-      const body = metadata.stream && contentType.includes("text/event-stream") ? await readStreamingImages(response, taskId, sender, metadata.output_format) : await readResponseBody(response);
+      let body;
+      try {
+        body = await sendEditRequest(activeMetadata, inputFiles, maskFile);
+      } catch (error) {
+        if (!activeMetadata.stream || activeMetadata === nonStreamingMetadata || !isStreamParamRejected(error)) throw error;
+        streamFellBack = true;
+        armTimeout();
+        if (!sender.isDestroyed()) sender.send("generation:notice", { taskId, message: "当前服务不支持流式生成参数，已自动改用普通模式" });
+        activeMetadata = nonStreamingMetadata;
+        body = await sendEditRequest(activeMetadata, inputFiles, maskFile);
+      }
       if (!Array.isArray(body.data) || !body.data.length) throw new AppError("响应中没有可用的图片数据", { code: "invalid_response", requestId });
 
       const createdAt = new Date();
@@ -838,7 +894,7 @@ async function createEdit(request, sender) {
         else if (item?.url) bytes = await downloadCompatibleImage(item.url, controllerRecord.controller.signal);
         else throw new AppError(`第 ${index + 1} 张结果缺少 b64_json 或 url`, { code: "invalid_response" });
         if (!bytes.length) throw new AppError("API 返回了空图片", { code: "decode_error" });
-        const format = detectImageFormat(bytes, metadata.output_format);
+        const format = detectImageFormat(bytes, activeMetadata.output_format);
         const filename = `${timestampName(createdAt)}_${taskId.slice(-8)}_${index + 1}.${format === "jpeg" ? "jpg" : format}`;
         const filePath = await storage.writeResult(filename, bytes);
         images.push({ id: `${taskId}-${index}`, path: filePath, filename, format, mime: mimeForFormat(format), bytes: bytes.length });
@@ -863,21 +919,21 @@ async function createEdit(request, sender) {
         editMode: maskAsset ? "mask" : "full",
         createdAt: createdAt.toISOString(),
         durationMs: Date.now() - startedAt,
-        prompt: metadata.prompt,
-        model: metadata.model,
+        prompt: activeMetadata.prompt,
+        model: activeMetadata.model,
         connectionId: profile.id,
         connectionName: profile.name,
         providerHost: new URL(baseUrl).host,
         favorite: false,
         inputs,
         mask: maskRecord,
-        parameters: { size: metadata.size, quality: metadata.quality, n: metadata.n, background: metadata.background, outputFormat: metadata.output_format, outputCompression: metadata.output_compression ?? null, moderation: metadata.moderation, stream: metadata.stream },
+        parameters: { size: activeMetadata.size, quality: activeMetadata.quality, n: activeMetadata.n, background: activeMetadata.background, outputFormat: activeMetadata.output_format, outputCompression: activeMetadata.output_compression ?? null, moderation: activeMetadata.moderation, stream: activeMetadata.stream },
         requestId,
         usage: body.usage || null,
         images,
       };
       await storage.addHistory(entry);
-      await addLog({ ...logBase(profile, "image_edit", endpoint), status: "success", httpStatus: responseStatus, durationMs: entry.durationMs, requestId, request: editRequestDetails(profile, endpoint, metadata, logInputs, logMask), response: { imageCount: images.length, usage: body.usage || null }, imageCount: images.length });
+      await addLog({ ...logBase(profile, "image_edit", endpoint), status: "success", httpStatus: responseStatus, durationMs: entry.durationMs, requestId, streamFallback: streamFellBack, request: editRequestDetails(profile, endpoint, activeMetadata, logInputs, logMask), response: { imageCount: images.length, usage: body.usage || null }, imageCount: images.length });
       await setConnectionCapability(profile.id, "editCapability", "supported");
       return hydrateEntry(entry);
     } catch (error) {
@@ -893,7 +949,7 @@ async function createEdit(request, sender) {
         await setConnectionCapability(profile.id, "editCapability", "unsupported");
       }
       await storage.cleanTaskTempDir(taskId).catch(() => {});
-      await addLog({ ...logBase(profile, "image_edit", endpoint), status: nextError.code === "cancelled" ? "cancelled" : "error", httpStatus: nextError.status || responseStatus, durationMs: Date.now() - startedAt, requestId: nextError.requestId || requestId, request: editRequestDetails(profile, endpoint, metadata, logInputs, logMask), responseBody: nextError.detail || null, errorCode: nextError.code || "network_error", errorMessage: nextError.message });
+      await addLog({ ...logBase(profile, "image_edit", endpoint), status: nextError.code === "cancelled" ? "cancelled" : "error", httpStatus: nextError.status || responseStatus, durationMs: Date.now() - startedAt, requestId: nextError.requestId || requestId, streamFallback: streamFellBack, request: editRequestDetails(profile, endpoint, activeMetadata, logInputs, logMask), responseBody: nextError.detail || null, errorCode: nextError.code || "network_error", errorMessage: nextError.message });
       throw nextError;
     } finally {
       clearTimeout(timeout);
@@ -1064,6 +1120,7 @@ app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(
 module.exports = {
   __testing: {
     createEdit,
+    createGeneration,
     saveMask,
     cancelTask,
     setStorage: (value) => { storage = value; },

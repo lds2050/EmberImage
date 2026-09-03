@@ -202,8 +202,79 @@ test("createEdit streams SSE partials over the shared generation channel", async
   );
 });
 
-test("createEdit marks the connection editCapability unsupported on 404", async () => {
+const RELAY_400 = { error: { message: "Value error, partial_images requires stream=true", type: "invalid_request_error", param: "", code: "400" } };
+
+function relayRejectionHandler(onBody) {
+  const seen = [];
+  return (req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => { raw += chunk; });
+    req.on("end", () => {
+      seen.push(raw);
+      onBody?.(seen);
+      if (seen.length === 1) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(RELAY_400));
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: [{ b64_json: PNG_BYTES.toString("base64") }] }));
+    });
+  };
+}
+
+test("createEdit retries without streaming when a relay rejects partial_images", async () => {
   await withEditHarness(
+    relayRejectionHandler(),
+    async ({ storage, sender, partials }) => {
+      const entry = await hooks.createEdit(editRequest("task-edit-fallback", { stream: true, partialImages: 2 }), sender);
+      assert.equal(entry.images.length, 1);
+      assert.equal(entry.parameters.stream, false);
+      const notice = partials.find((item) => item.channel === "generation:notice");
+      assert.ok(notice, "expected a generation:notice event");
+      assert.match(notice.payload.message, /普通模式/);
+      const logs = await storage.listLogs();
+      assert.equal(logs[0].status, "success");
+      assert.equal(logs[0].streamFallback, true);
+    }
+  );
+});
+
+test("createGeneration retries without streaming when a relay rejects partial_images", async () => {
+  const bodies = [];
+  await withEditHarness(
+    relayRejectionHandler((seen) => {
+      if (seen.length) bodies.push(JSON.parse(seen[seen.length - 1]));
+    }),
+    async ({ sender }) => {
+      const entry = await hooks.createGeneration(
+        {
+          taskId: "task-gen-fallback",
+          parameters: { prompt: "乌鸦坐飞机", size: "1024x1024", quality: "auto", n: 1, background: "auto", outputFormat: "png", moderation: "auto", stream: true, partialImages: 2 },
+        },
+        sender
+      );
+      assert.equal(bodies.length, 2);
+      assert.equal(bodies[0].stream, true);
+      assert.equal(bodies[0].partial_images, 2);
+      assert.equal(bodies[1].stream, false);
+      assert.ok(!("partial_images" in bodies[1]));
+      assert.equal(entry.parameters.stream, false);
+      assert.equal(entry.images.length, 1);
+    }
+  );
+});
+
+test("non-stream requests never trigger the stream fallback", async () => {
+  await withEditHarness(
+    relayRejectionHandler(),
+    async ({ sender }) => {
+      await assert.rejects(hooks.createEdit(editRequest("task-plain-400"), sender), (error) => error.status === 400);
+    }
+  );
+});
+
+test("createEdit marks the connection editCapability unsupported on 404", async () => {  await withEditHarness(
     (req, res) => {
       req.resume();
       req.on("end", () => {

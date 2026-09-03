@@ -23,6 +23,11 @@ contextBridge.exposeInMainWorld("imageStudio", {
     ipcRenderer.on("generation:partial", listener);
     return () => ipcRenderer.removeListener("generation:partial", listener);
   },
+  onGenerationNotice: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("generation:notice", listener);
+    return () => ipcRenderer.removeListener("generation:notice", listener);
+  },
   listHistory: () => ipcRenderer.invoke("history:list"),
   favoriteHistory: (id, favorite) => ipcRenderer.invoke("history:favorite", { id, favorite }),
   deleteHistory: (id) => ipcRenderer.invoke("history:delete", id),

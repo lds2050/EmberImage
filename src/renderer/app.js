@@ -2996,6 +2996,11 @@
     $("#partial-preview").classList.remove("hidden");
   });
 
+  api.onGenerationNotice((payload) => {
+    if (payload.taskId !== state.currentTaskId || !payload.message) return;
+    toast(payload.message);
+  });
+
   initialize().catch((error) => {
     console.error(error);
     toast(`应用初始化失败：${error.message}`, "error");
