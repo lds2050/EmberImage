@@ -14,7 +14,7 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test",
-    "check": "node --check src/main/main.cjs && node --check src/main/preload.cjs && node --check src/main/secure-store.cjs && node --check src/main/storage.cjs && node --check src/renderer/app.js && node --check src/renderer/workers/selection.worker.js && node --check src/shared/validation.js && node --check src/shared/algorithms.js && node --check src/shared/selection-model.js && node --check src/shared/edit-form.js && node --check src/shared/mask-model.js && node --check src/shared/exif.js",
+    "check": "node --check src/main/main.cjs && node --check src/main/preload.cjs && node --check src/main/secure-store.cjs && node --check src/main/storage.cjs && node --check src/renderer/app.js && node --check src/renderer/workers/selection.worker.js && node --check src/shared/validation.js && node --check src/shared/providers/index.cjs && node --check src/shared/providers/openai.cjs && node --check src/shared/algorithms.js && node --check src/shared/selection-model.js && node --check src/shared/edit-form.js && node --check src/shared/mask-model.js && node --check src/shared/exif.js",
     "dist:mac": "electron-builder --mac dmg --publish never",
     "dist:mac:arm64": "electron-builder --mac dmg --arm64 --publish never",
     "dist:mac:x64": "electron-builder --mac dmg --x64 --publish never",

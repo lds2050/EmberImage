@@ -7,6 +7,7 @@ const path = require("node:path");
 const DEFAULT_PROFILE = {
   id: "openai-default",
   name: "OpenAI",
+  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
   model: "gpt-image-2",
   keyStorage: "session",

@@ -387,7 +387,7 @@
               <section class="settings-card connection-editor-card">
                 <div class="settings-card-heading">
                   <div class="settings-icon coral">↗</div>
-                  <div><h2 id="connection-editor-title">编辑连接</h2><p>所有服务统一使用 OpenAI 兼容的图片生成协议。</p></div>
+                  <div><h2 id="connection-editor-title">编辑连接</h2><p>按接口类型配置服务地址与密钥；不同类型支持的生成能力不同。</p></div>
                   <div class="settings-heading-actions">
                     <button class="request-log-trigger" id="open-request-logs-button" type="button">
                       <span>≋</span> 请求日志 <strong id="request-log-count">0</strong>
@@ -397,6 +397,24 @@
                 </div>
 
                 <div class="form-grid">
+                  <div class="form-field full">
+                    <label>接口类型</label>
+                    <div class="provider-selector" id="provider-options">
+                      <button class="provider-option active" type="button" data-value="openai">
+                        <span class="provider-radio">✓</span>
+                        <span><strong>OpenAI 兼容</strong><small>gpt-image 系列与兼容中转。</small></span>
+                      </button>
+                      <button class="provider-option" type="button" data-value="seedream" disabled>
+                        <span class="provider-radio">✓</span>
+                        <span><strong>Seedream</strong><small>火山方舟 · 后续版本开放</small></span>
+                      </button>
+                      <button class="provider-option" type="button" data-value="gemini" disabled>
+                        <span class="provider-radio">✓</span>
+                        <span><strong>Gemini</strong><small>Google 生成内容接口 · 后续版本开放</small></span>
+                      </button>
+                    </div>
+                    <p class="field-help">Seedream 与 Gemini 将在 v0.6.0 后续版本开放；当前所有连接继续使用 OpenAI 兼容协议。</p>
+                  </div>
                   <div class="form-field">
                     <label for="connection-name-input">连接名称</label>
                     <input id="connection-name-input" type="text" value="OpenAI" spellcheck="false" />

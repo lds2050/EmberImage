@@ -2414,6 +2414,10 @@ summary:focus-visible {
 
 .storage-options { grid-template-columns: 1fr; }
 
+#provider-options.provider-selector { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.provider-option:disabled { opacity: 0.55; cursor: not-allowed; }
+.provider-option:disabled:hover { border-color: var(--line); }
+
 .settings-icon.charcoal { color: #e7e3dc; background: #363634; }
 .log-heading-actions { display: flex; gap: 6px; }
 

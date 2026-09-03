@@ -154,6 +154,13 @@
     $$(".storage-option").forEach((button) => button.classList.toggle("active", button.dataset.value === state.keyStorage));
   }
 
+  function setProviderChoice(value) {
+    // seedream/gemini become selectable once their adapters ship (v0.6.0 stage B);
+    // anything unknown keeps the connection on the OpenAI-compatible protocol.
+    const provider = ["seedream", "gemini"].includes(value) ? value : "openai";
+    $$("#provider-options .provider-option").forEach((button) => button.classList.toggle("active", button.dataset.value === provider));
+  }
+
   function setStreamEnabled(enabled) {
     state.streamEnabled = Boolean(enabled);
     $("#stream-toggle").setAttribute("aria-pressed", String(state.streamEnabled));
@@ -191,6 +198,7 @@
     const draft = profile || {
       id: crypto.randomUUID(),
       name: options.official ? "OpenAI" : "新连接",
+      provider: "openai",
       baseUrl: options.official ? "https://api.openai.com/v1" : "",
       model: "gpt-image-2",
       keyStorage: "session",
@@ -202,6 +210,7 @@
     state.editingConnectionId = draft.id;
     state.draftNew = !profile;
     $("#connection-editor-title").textContent = state.draftNew ? "新建连接" : `编辑 ${draft.name}`;
+    setProviderChoice(draft.provider);
     $("#connection-name-input").value = draft.name || "";
     $("#base-url-input").value = draft.baseUrl || "";
     $("#model-input").value = draft.model || "gpt-image-2";
@@ -224,6 +233,7 @@
     return {
       id: state.editingConnectionId,
       name: $("#connection-name-input").value.trim(),
+      provider: $("#provider-options .provider-option.active")?.dataset.value || "openai",
       baseUrl: $("#base-url-input").value.trim(),
       model: $("#model-input").value.trim(),
       apiKey: $("#api-key-input").value.trim(),
@@ -2933,6 +2943,7 @@
   $("#official-template-button").addEventListener("click", () => populateConnectionEditor(null, { official: true }));
   $("#stream-toggle").addEventListener("click", () => setStreamEnabled(!state.streamEnabled));
   $$(".storage-option").forEach((button) => button.addEventListener("click", () => setStorageChoice(button.dataset.value)));
+  $$("#provider-options .provider-option").forEach((button) => button.addEventListener("click", () => setProviderChoice(button.dataset.value)));
   $("#toggle-key-visibility").addEventListener("click", () => {
     const input = $("#api-key-input");
     input.type = input.type === "password" ? "text" : "password";

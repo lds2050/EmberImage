@@ -10,7 +10,7 @@ const { pathToFileURL } = require("node:url");
 const { AppStorage, DEFAULT_PROFILE } = require("./storage.cjs");
 const { decryptSecret, decryptSecretForDevice, encryptSecretForDevice, maskSecret } = require("./secure-store.cjs");
 const Validation = require("../shared/validation.js");
-const { buildEditFormData } = require("../shared/edit-form.js");
+const Providers = require("../shared/providers/index.cjs");
 const Exif = require("../shared/exif.js");
 
 let mainWindow;
@@ -82,6 +82,7 @@ function publicProfile(profile) {
   return {
     id: profile.id,
     name: profile.name,
+    provider: Providers.normalizeProvider(profile.provider),
     baseUrl: profile.baseUrl,
     model: profile.model,
     keyStorage: profile.keyStorage,
@@ -278,6 +279,7 @@ async function saveConnection(connection) {
     ...(existing || {}),
     id,
     name,
+    provider: Providers.normalizeProvider(connection.provider),
     baseUrl: assertSecureBaseUrl(connection.baseUrl),
     model: String(connection.model).trim(),
     keyStorage,
@@ -337,14 +339,15 @@ async function testConnection(connection = {}) {
   }
   const baseUrl = assertSecureBaseUrl(profile.baseUrl);
 
-  const endpoint = Validation.modelsEndpoint(baseUrl);
+  const provider = Providers.resolveProvider(profile);
+  const endpoint = provider.endpoints(baseUrl).models;
   const startedAt = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Math.min(validateTimeout(profile.requestTimeoutSeconds), 60) * 1000);
   try {
     const response = await fetch(endpoint, {
       method: "GET",
-      headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+      headers: { ...provider.headers(apiKey), Accept: "application/json" },
       signal: controller.signal,
     });
     const body = await readResponseBody(response);
@@ -494,12 +497,13 @@ async function createGeneration(request, sender) {
     if (!apiKey) throw new AppError("请先输入 API Key，或完成旧版密钥迁移", { code: "missing_api_key" });
 
     const baseUrl = assertSecureBaseUrl(profile.baseUrl);
-    const payload = Validation.buildGenerationPayload({ ...request.parameters, model: profile.model });
+    const provider = Providers.resolveProvider(profile);
+    const endpoint = provider.endpoints(baseUrl).generation;
+    const payload = provider.buildGenerationBody({ ...request.parameters, model: profile.model }, profile);
     // Fallback body for relays that reject stream parameters (see isStreamParamRejected).
     const nonStreamingPayload = { ...payload, stream: false };
     delete nonStreamingPayload.partial_images;
     let activePayload = payload;
-    const endpoint = Validation.generationEndpoint(baseUrl);
     const controllerRecord = { controller: new AbortController(), reason: "cancelled" };
     generationControllers.set(taskId, controllerRecord);
     const startedAt = Date.now();
@@ -519,7 +523,7 @@ async function createGeneration(request, sender) {
     const sendGenerationRequest = async (requestPayload) => {
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", Accept: requestPayload.stream ? "text/event-stream" : "application/json" },
+        headers: { ...provider.headers(apiKey), "Content-Type": "application/json", Accept: requestPayload.stream ? "text/event-stream" : "application/json" },
         body: JSON.stringify(requestPayload),
         signal: controllerRecord.controller.signal,
       });
@@ -789,8 +793,9 @@ async function createEdit(request, sender) {
     if (!apiKey) throw new AppError("请先输入 API Key，或完成旧版密钥迁移", { code: "missing_api_key" });
 
     const baseUrl = assertSecureBaseUrl(profile.baseUrl);
-    const metadata = Validation.buildEditMetadata({ ...request.parameters, model: profile.model, imageCount: assets.length });
-    const endpoint = Validation.editEndpoint(baseUrl);
+    const provider = Providers.resolveProvider(profile);
+    const metadata = provider.buildEditMetadata({ ...request.parameters, model: profile.model, imageCount: assets.length });
+    const endpoint = provider.endpoints(baseUrl).edit;
 
     const controllerRecord = { controller: new AbortController(), reason: "cancelled" };
     generationControllers.set(taskId, controllerRecord);
@@ -819,8 +824,8 @@ async function createEdit(request, sender) {
     const sendEditRequest = async (requestMetadata, inputFiles, maskFile) => {
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, Accept: requestMetadata.stream ? "text/event-stream" : "application/json" },
-        body: buildEditFormData(requestMetadata, inputFiles, maskFile),
+        headers: { ...provider.headers(apiKey), Accept: requestMetadata.stream ? "text/event-stream" : "application/json" },
+        body: provider.buildEditBody(requestMetadata, inputFiles, maskFile),
         signal: controllerRecord.controller.signal,
       });
       responseStatus = response.status;
