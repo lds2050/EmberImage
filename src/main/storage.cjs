@@ -44,6 +44,9 @@ function normalizePromptEntry(entry) {
     createdAt: typeof item.createdAt === "string" && item.createdAt ? item.createdAt : null,
     updatedAt: typeof item.updatedAt === "string" && item.updatedAt ? item.updatedAt : null,
     sourceHistoryId: typeof item.sourceHistoryId === "string" && item.sourceHistoryId ? item.sourceHistoryId : null,
+    favorite: item.favorite === true,
+    usageCount: Number.isFinite(item.usageCount) && item.usageCount > 0 ? Math.floor(item.usageCount) : 0,
+    lastUsedAt: typeof item.lastUsedAt === "string" && item.lastUsedAt ? item.lastUsedAt : null,
   };
 }
 
@@ -290,6 +293,78 @@ class AppStorage {
       const next = entries.filter((entry) => entry.id !== id);
       await this.writeJson(this.promptsPath, { version: PROMPTS_VERSION, entries: next });
       return next.length !== entries.length;
+    });
+  }
+
+  async removePrompts(ids) {
+    const wanted = new Set(Array.isArray(ids) ? ids.map((id) => String(id)) : []);
+    return this.runExclusive(this.promptsPath, async () => {
+      const stored = await this.readJson(this.promptsPath, null);
+      const entries = stored && Array.isArray(stored.entries) ? stored.entries : [];
+      const next = entries.filter((entry) => !wanted.has(entry.id));
+      await this.writeJson(this.promptsPath, { version: PROMPTS_VERSION, entries: next });
+      return entries.length - next.length;
+    });
+  }
+
+  async setPromptFavorite(id, favorite) {
+    return this.runExclusive(this.promptsPath, async () => {
+      const stored = await this.readJson(this.promptsPath, null);
+      const entries = stored && Array.isArray(stored.entries) ? stored.entries : [];
+      const index = entries.findIndex((entry) => entry.id === id);
+      if (index < 0) return null;
+      // 收藏/取消收藏不动 updatedAt：它表示内容编辑时间，参与排序兜底
+      entries[index] = { ...entries[index], favorite: favorite === true };
+      await this.writeJson(this.promptsPath, { version: PROMPTS_VERSION, entries });
+      return normalizePromptEntry(entries[index]);
+    });
+  }
+
+  async recordPromptUsage(id) {
+    return this.runExclusive(this.promptsPath, async () => {
+      const stored = await this.readJson(this.promptsPath, null);
+      const entries = stored && Array.isArray(stored.entries) ? stored.entries : [];
+      const index = entries.findIndex((entry) => entry.id === id);
+      if (index < 0) return null;
+      const usageCount = (Number(entries[index].usageCount) || 0) + 1;
+      entries[index] = { ...entries[index], usageCount, lastUsedAt: new Date().toISOString() };
+      await this.writeJson(this.promptsPath, { version: PROMPTS_VERSION, entries });
+      return normalizePromptEntry(entries[index]);
+    });
+  }
+
+  async setPromptsCategory(ids, category) {
+    const wanted = new Set(Array.isArray(ids) ? ids.map((id) => String(id)) : []);
+    const target = normalizePromptEntry({ text: "x", category }).category;
+    return this.runExclusive(this.promptsPath, async () => {
+      const stored = await this.readJson(this.promptsPath, null);
+      const entries = stored && Array.isArray(stored.entries) ? stored.entries : [];
+      let updated = 0;
+      const next = entries.map((entry) => {
+        if (!wanted.has(entry.id) || entry.category === target) return entry;
+        updated += 1;
+        return { ...entry, category: target, updatedAt: new Date().toISOString() };
+      });
+      await this.writeJson(this.promptsPath, { version: PROMPTS_VERSION, entries: next });
+      return updated;
+    });
+  }
+
+  async renamePromptCategory(from, to) {
+    const source = typeof from === "string" ? from.trim().slice(0, PROMPT_CATEGORY_LIMIT) : "";
+    const target = normalizePromptEntry({ text: "x", category: to }).category;
+    if (!source) throw new Error("分类名不能为空");
+    return this.runExclusive(this.promptsPath, async () => {
+      const stored = await this.readJson(this.promptsPath, null);
+      const entries = stored && Array.isArray(stored.entries) ? stored.entries : [];
+      let updated = 0;
+      const next = entries.map((entry) => {
+        if (entry.category !== source) return entry;
+        updated += 1;
+        return { ...entry, category: target, updatedAt: new Date().toISOString() };
+      });
+      await this.writeJson(this.promptsPath, { version: PROMPTS_VERSION, entries: next });
+      return updated;
     });
   }
 

@@ -3497,3 +3497,97 @@ summary:focus-visible {
   color: var(--danger);
   font-size: 11px;
 }
+
+/* ---- v0.5.4 阶段 B2：收藏 / 使用次数 / 批量管理 / 分类重命名 ---- */
+
+.prompt-bulk-dialog { width: 440px; }
+
+.prompt-bulk-count {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.prompt-favorite-button {
+  flex-shrink: 0;
+  padding: 0 2px;
+  color: var(--muted-light);
+  background: none;
+  border: 0;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.prompt-favorite-button:hover {
+  color: #c98a1a;
+}
+
+.prompt-favorite-button.active {
+  color: #e0a52f;
+}
+
+.prompt-entry-usage {
+  flex-shrink: 0;
+  color: var(--muted-light);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.prompt-select-mark {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: none;
+  width: 18px;
+  height: 18px;
+  color: transparent;
+  background: transparent;
+  border: 1.5px solid var(--muted-light);
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.prompt-entry.selectable {
+  cursor: pointer;
+}
+
+.prompt-entry.selectable .prompt-select-mark {
+  display: block;
+}
+
+.prompt-entry.selectable:hover {
+  border-color: var(--muted-light);
+}
+
+.prompt-entry.selected {
+  border-color: var(--ink);
+  background: var(--surface-strong);
+}
+
+.prompt-entry.selected .prompt-select-mark {
+  color: #fff;
+  background: var(--ink);
+  border-color: var(--ink);
+}
+
+.prompt-entry.selected .prompt-select-mark::before {
+  content: "✓";
+}
+
+.prompt-filter-rename {
+  min-height: 30px;
+  padding: 0 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px dashed var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.prompt-filter-rename:hover {
+  color: var(--ink);
+  border-color: var(--muted-light);
+}

@@ -345,8 +345,15 @@
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m16 16 5 5" /></svg>
               <input id="prompts-search" type="search" placeholder="搜索提示词或分类（多个词空格分隔）" />
             </label>
-            <div class="history-toolbar-actions">
+            <div class="history-toolbar-actions" id="prompt-toolbar-normal">
+              <button class="filter-button" id="toggle-prompt-bulk-button" type="button">批量管理</button>
               <button class="primary-button" id="add-prompt-button" type="button">新建提示词</button>
+            </div>
+            <div class="history-toolbar-actions hidden" id="prompt-toolbar-bulk">
+              <span class="prompt-bulk-count" id="prompt-bulk-count">已选 0 条</span>
+              <button class="ghost-button" id="prompt-bulk-category-button" type="button">移动到分类</button>
+              <button class="ghost-button danger" id="prompt-bulk-delete-button" type="button">删除所选</button>
+              <button class="ghost-button" id="exit-prompt-bulk-button" type="button">退出管理</button>
             </div>
           </div>
           <div class="prompt-filter-row" id="prompt-filter-row"></div>
@@ -580,6 +587,27 @@
         <div class="size-dialog-actions">
           <button class="secondary-button" id="cancel-prompt-dialog-button" type="button">取消</button>
           <button class="primary-button compact" id="save-prompt-dialog-button" type="button">保存</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="size-dialog-backdrop hidden" id="prompt-bulk-dialog-overlay">
+      <section class="size-dialog prompt-bulk-dialog" role="dialog" aria-modal="true" aria-labelledby="prompt-bulk-dialog-title">
+        <div class="size-dialog-heading">
+          <div>
+            <h2 id="prompt-bulk-dialog-title">移动到分类</h2>
+            <p id="prompt-bulk-dialog-subtitle">…</p>
+          </div>
+          <button class="dialog-close-button" id="close-prompt-bulk-dialog-button" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="prompt-dialog-body">
+          <label class="prompt-dialog-label" for="prompt-bulk-dialog-input">分类</label>
+          <input id="prompt-bulk-dialog-input" type="text" maxlength="24" list="prompt-category-options" placeholder="留空归入「未分类」" />
+          <p class="prompt-dialog-error hidden" id="prompt-bulk-dialog-error"></p>
+        </div>
+        <div class="size-dialog-actions">
+          <button class="secondary-button" id="cancel-prompt-bulk-dialog-button" type="button">取消</button>
+          <button class="primary-button compact" id="save-prompt-bulk-dialog-button" type="button">确定</button>
         </div>
       </section>
     </div>

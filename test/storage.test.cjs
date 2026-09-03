@@ -157,3 +157,58 @@ test("prompts: rejects empty text, enforces the 500 limit and quarantines corrup
     assert.equal(recovered.category, "未分类");
   });
 });
+
+test("prompts: favorite, usage tracking and new entry defaults", async () => {
+  await withStorage(async (storage) => {
+    const added = await storage.addPrompt({ text: "月光下的富士山" });
+    assert.equal(added.favorite, false);
+    assert.equal(added.usageCount, 0);
+    assert.equal(added.lastUsedAt, null);
+
+    const favored = await storage.setPromptFavorite(added.id, true);
+    assert.equal(favored.favorite, true);
+    assert.equal(favored.updatedAt, added.updatedAt, "favorite toggle must not touch updatedAt");
+    assert.equal(await storage.setPromptFavorite("missing", true), null);
+
+    const used = await storage.recordPromptUsage(added.id);
+    assert.equal(used.usageCount, 1);
+    assert.ok(used.lastUsedAt);
+    const usedAgain = await storage.recordPromptUsage(added.id);
+    assert.equal(usedAgain.usageCount, 2);
+    assert.equal(usedAgain.updatedAt, added.updatedAt, "usage tracking must not touch updatedAt");
+    assert.equal(await storage.recordPromptUsage("missing"), null);
+
+    const legacy = JSON.parse(await fs.readFile(path.join(storage.rootDirectory, "prompts.json"), "utf8"));
+    legacy.entries.push({ id: "legacy-1", text: "legacy entry", category: "旧", usageCount: "not-a-number", favorite: "yes" });
+    await fs.writeFile(path.join(storage.rootDirectory, "prompts.json"), JSON.stringify(legacy));
+    const listed = await storage.listPrompts();
+    const legacyEntry = listed.find((entry) => entry.id === "legacy-1");
+    assert.equal(legacyEntry.usageCount, 0);
+    assert.equal(legacyEntry.favorite, false);
+  });
+});
+
+test("prompts: bulk delete, bulk category move and category rename", async () => {
+  await withStorage(async (storage) => {
+    const first = await storage.addPrompt({ text: "一", category: "风景" });
+    const second = await storage.addPrompt({ text: "二", category: "风景" });
+    const third = await storage.addPrompt({ text: "三", category: "人像" });
+
+    assert.equal(await storage.setPromptsCategory([first.id, second.id], "  自然 "), 2);
+    assert.equal((await storage.listPrompts()).filter((entry) => entry.category === "自然").length, 2);
+    assert.equal(await storage.setPromptsCategory([first.id], "风景"), 1);
+    assert.equal(await storage.setPromptsCategory([first.id], "风景"), 0, "same category move is a no-op");
+    assert.equal(await storage.setPromptsCategory(["missing"], "x"), 0);
+    assert.equal(await storage.setPromptsCategory([third.id], ""), 1);
+    assert.equal((await storage.listPrompts()).find((entry) => entry.id === third.id).category, "未分类");
+
+    assert.equal(await storage.renamePromptCategory("风景", "风光"), 1);
+    assert.equal((await storage.listPrompts()).find((entry) => entry.id === first.id).category, "风光");
+    await assert.rejects(() => storage.renamePromptCategory("  ", "x"), /分类名不能为空/);
+
+    assert.equal(await storage.removePrompts([first.id, second.id, "missing"]), 2);
+    assert.equal((await storage.listPrompts()).length, 1);
+    assert.equal(await storage.removePrompts([]), 0);
+    assert.equal(third.text, "三");
+  });
+});

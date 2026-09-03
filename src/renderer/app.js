@@ -43,6 +43,9 @@
     prompts: [],
     editingPromptId: null,
     promptFilter: { query: "", category: "" },
+    promptBulkMode: false,
+    promptBulkSelection: null,
+    promptBulkDialogMode: null,
   };
 
   function unwrap(result) {
@@ -2290,11 +2293,47 @@
       <button class="prompt-filter-chip${chip.value === active ? " active" : ""}" type="button" data-category="${escapeHtml(chip.value)}">
         ${escapeHtml(chip.label)}<span>${chip.count}</span>
       </button>`).join("");
+    if (active) {
+      row.insertAdjacentHTML("beforeend", `
+        <button class="prompt-filter-rename" type="button" title="重命名当前分类">✎ 重命名分类</button>`);
+      row.querySelector(".prompt-filter-rename").addEventListener("click", () => openPromptBulkDialog("rename"));
+    }
     row.classList.toggle("hidden", state.prompts.length === 0);
     $$("#prompt-filter-row .prompt-filter-chip").forEach((chip) => chip.addEventListener("click", () => {
       state.promptFilter.category = chip.dataset.category;
       renderPrompts();
     }));
+  }
+
+  function updatePromptBulkToolbar() {
+    const count = state.promptBulkSelection ? state.promptBulkSelection.size : 0;
+    $("#prompt-bulk-count").textContent = `已选 ${count} 条`;
+    $("#prompt-bulk-category-button").disabled = count === 0;
+    $("#prompt-bulk-delete-button").disabled = count === 0;
+  }
+
+  function togglePromptBulkMode(force) {
+    state.promptBulkMode = force !== undefined ? force : !state.promptBulkMode;
+    state.promptBulkSelection = state.promptBulkMode ? new Set() : null;
+    $("#toggle-prompt-bulk-button").classList.toggle("active", state.promptBulkMode);
+    $("#toggle-prompt-bulk-button").textContent = state.promptBulkMode ? "批量管理中" : "批量管理";
+    $("#prompt-toolbar-normal").classList.toggle("hidden", state.promptBulkMode);
+    $("#prompt-toolbar-bulk").classList.toggle("hidden", !state.promptBulkMode);
+    renderPrompts();
+  }
+
+  async function deleteSelectedPrompts() {
+    const ids = [...(state.promptBulkSelection || [])];
+    if (!ids.length) return;
+    if (!window.confirm(`删除已选的 ${ids.length} 条提示词？`)) return;
+    try {
+      const { deleted } = unwrap(await api.bulkDeletePrompts(ids));
+      state.promptBulkSelection = new Set();
+      await loadPrompts();
+      toast(`已删除 ${deleted} 条提示词`);
+    } catch (error) {
+      toast(error.message, "error");
+    }
   }
 
   function renderPrompts() {
@@ -2307,30 +2346,57 @@
     $("#prompt-category-options").innerHTML = categories
       .map((name) => `<option value="${escapeHtml(name)}"></option>`)
       .join("");
+    updatePromptBulkToolbar();
     const filtered = state.prompts.filter(promptMatchesFilter);
     const hasAny = state.prompts.length > 0;
     $("#prompts-empty").classList.toggle("hidden", hasAny);
     $("#prompts-nomatch").classList.toggle("hidden", !(hasAny && filtered.length === 0));
     list.classList.toggle("hidden", filtered.length === 0);
-    const sorted = [...filtered].sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
+    // 收藏置顶 → 使用次数 → 最近更新
+    const sorted = [...filtered].sort((a, b) =>
+      (Number(b.favorite) - Number(a.favorite))
+      || ((b.usageCount || 0) - (a.usageCount || 0))
+      || String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
     sorted.forEach((entry) => {
       const card = document.createElement("article");
-      card.className = "prompt-entry";
+      const selected = state.promptBulkMode && state.promptBulkSelection?.has(entry.id);
+      card.className = `prompt-entry${state.promptBulkMode ? " selectable" : ""}${selected ? " selected" : ""}${entry.favorite ? " favorite" : ""}`;
       card.innerHTML = `
+        <span class="prompt-select-mark" aria-hidden="true"></span>
         <p class="prompt-entry-text">${escapeHtml(entry.text)}</p>
         <div class="prompt-entry-footer">
+          <button class="prompt-favorite-button${entry.favorite ? " active" : ""}" type="button" aria-label="${entry.favorite ? "取消收藏" : "收藏"}" title="${entry.favorite ? "取消收藏" : "收藏置顶"}">${entry.favorite ? "★" : "☆"}</button>
           <span class="prompt-entry-category">${escapeHtml(entry.category || "未分类")}</span>
+          ${entry.usageCount ? `<span class="prompt-entry-usage">用了 ${entry.usageCount} 次</span>` : ""}
           <span class="prompt-entry-time">${escapeHtml(formatDate(entry.updatedAt || entry.createdAt))}</span>
           <button class="history-menu-button" type="button" aria-label="更多操作">···</button>
         </div>
         <div class="history-card-menu hidden">
           <button type="button" data-action="use">用于生成</button>
           <button type="button" data-action="copy">复制文本</button>
+          <button type="button" data-action="favorite">${entry.favorite ? "取消收藏" : "收藏置顶"}</button>
           <button type="button" data-action="edit">编辑</button>
           <button class="danger" type="button" data-action="delete">删除</button>
         </div>`;
       const menu = card.querySelector(".history-card-menu");
       const menuButton = card.querySelector(".history-menu-button");
+      const favoriteButton = card.querySelector(".prompt-favorite-button");
+      favoriteButton.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        try {
+          const updated = unwrap(await api.favoritePrompt(entry.id, !entry.favorite));
+          if (updated) Object.assign(entry, updated);
+          renderPrompts();
+        } catch (error) { toast(error.message, "error"); }
+      });
+      card.addEventListener("click", (event) => {
+        if (!state.promptBulkMode) return;
+        if (event.target.closest(".history-card-menu, .history-menu-button, .prompt-favorite-button")) return;
+        if (state.promptBulkSelection.has(entry.id)) state.promptBulkSelection.delete(entry.id);
+        else state.promptBulkSelection.add(entry.id);
+        card.classList.toggle("selected", state.promptBulkSelection.has(entry.id));
+        updatePromptBulkToolbar();
+      });
       menuButton.addEventListener("click", (event) => {
         event.stopPropagation();
         const opening = menu.classList.contains("hidden");
@@ -2342,15 +2408,28 @@
       menu.addEventListener("click", async (event) => {
         const action = event.target.closest("button")?.dataset.action;
         if (!action) return;
+        event.stopPropagation();
         menu.classList.add("hidden");
         if (action === "use") usePromptEntry(entry);
         if (action === "copy") {
           try { await navigator.clipboard.writeText(entry.text || ""); toast("提示词已复制"); }
           catch { toast("复制失败，请手动选择文本", "error"); }
         }
+        if (action === "favorite") {
+          try {
+            const updated = unwrap(await api.favoritePrompt(entry.id, !entry.favorite));
+            if (updated) Object.assign(entry, updated);
+            renderPrompts();
+          } catch (error) { toast(error.message, "error"); }
+        }
         if (action === "edit") openPromptDialog(entry);
         if (action === "delete" && window.confirm("删除这条提示词？")) {
-          try { unwrap(await api.deletePrompt(entry.id)); await loadPrompts(); toast("提示词已删除"); }
+          try {
+            unwrap(await api.deletePrompt(entry.id));
+            state.promptBulkSelection?.delete(entry.id);
+            await loadPrompts();
+            toast("提示词已删除");
+          }
           catch (error) { toast(error.message, "error"); }
         }
       });
@@ -2365,6 +2444,10 @@
     ensureModeMemory().generate.prompt = $("#prompt-input").value;
     updateGenerationState();
     navigate("generate");
+    // 「用了多少次」：用于生成即记一次，本地同步更新，落盘 fire-and-forget
+    entry.usageCount = (entry.usageCount || 0) + 1;
+    entry.lastUsedAt = new Date().toISOString();
+    api.recordPromptUsage(entry.id).catch(() => {});
     const promptInput = $("#prompt-input");
     promptInput.focus();
     promptInput.setSelectionRange(0, 0);
@@ -2423,6 +2506,58 @@
     } catch (error) {
       errorNode.textContent = error.message;
       errorNode.classList.remove("hidden");
+    }
+  }
+
+  function openPromptBulkDialog(mode) {
+    state.promptBulkDialogMode = mode;
+    const isRename = mode === "rename";
+    const count = state.promptBulkSelection ? state.promptBulkSelection.size : 0;
+    $("#prompt-bulk-dialog-title").textContent = isRename ? "重命名分类" : "移动到分类";
+    $("#prompt-bulk-dialog-subtitle").textContent = isRename
+      ? `将「${state.promptFilter.category}」下的所有提示词改为新分类名`
+      : `把已选的 ${count} 条提示词移动到指定分类`;
+    $("#prompt-bulk-dialog-input").value = isRename ? state.promptFilter.category : "";
+    $("#prompt-bulk-dialog-input").placeholder = isRename ? "输入新的分类名" : "留空归入「未分类」";
+    $("#prompt-bulk-dialog-error").classList.add("hidden");
+    $("#prompt-bulk-dialog-overlay").classList.remove("hidden");
+    const input = $("#prompt-bulk-dialog-input");
+    input.focus();
+    input.select();
+  }
+
+  function closePromptBulkDialog() {
+    $("#prompt-bulk-dialog-overlay").classList.add("hidden");
+    state.promptBulkDialogMode = null;
+  }
+
+  async function savePromptBulkDialog() {
+    const value = $("#prompt-bulk-dialog-input").value.trim();
+    const errorNode = $("#prompt-bulk-dialog-error");
+    const showBulkError = (message) => {
+      errorNode.textContent = message;
+      errorNode.classList.remove("hidden");
+    };
+    try {
+      if (state.promptBulkDialogMode === "rename") {
+        if (!value) { showBulkError("新分类名不能为空"); return; }
+        if (value === state.promptFilter.category) { showBulkError("新分类名与当前相同"); return; }
+        const { updated } = unwrap(await api.renamePromptCategory(state.promptFilter.category, value));
+        state.promptFilter.category = value;
+        closePromptBulkDialog();
+        await loadPrompts();
+        toast(`已重命名 ${updated} 条提示词的分类`);
+      } else {
+        const ids = [...(state.promptBulkSelection || [])];
+        if (!ids.length) { closePromptBulkDialog(); return; }
+        const { updated } = unwrap(await api.bulkCategoryPrompts(ids, value));
+        state.promptBulkSelection = new Set();
+        closePromptBulkDialog();
+        await loadPrompts();
+        toast(`已移动 ${updated} 条提示词`);
+      }
+    } catch (error) {
+      showBulkError(error.message);
     }
   }
 
@@ -2517,6 +2652,14 @@
       closePromptDialog();
       return;
     }
+    if (!$("#prompt-bulk-dialog-overlay").classList.contains("hidden")) {
+      closePromptBulkDialog();
+      return;
+    }
+    if (state.promptBulkMode) {
+      togglePromptBulkMode(false);
+      return;
+    }
     if (!$("#bg-removal-overlay").classList.contains("hidden")) {
       closeBgRemoval();
       return;
@@ -2606,6 +2749,19 @@
   });
   $("#prompt-dialog-overlay").addEventListener("mousedown", (event) => {
     if (event.target === event.currentTarget) closePromptDialog();
+  });
+  $("#toggle-prompt-bulk-button").addEventListener("click", () => togglePromptBulkMode());
+  $("#exit-prompt-bulk-button").addEventListener("click", () => togglePromptBulkMode(false));
+  $("#prompt-bulk-delete-button").addEventListener("click", deleteSelectedPrompts);
+  $("#prompt-bulk-category-button").addEventListener("click", () => openPromptBulkDialog("category"));
+  $("#close-prompt-bulk-dialog-button").addEventListener("click", closePromptBulkDialog);
+  $("#cancel-prompt-bulk-dialog-button").addEventListener("click", closePromptBulkDialog);
+  $("#save-prompt-bulk-dialog-button").addEventListener("click", savePromptBulkDialog);
+  $("#prompt-bulk-dialog-input").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); savePromptBulkDialog(); }
+  });
+  $("#prompt-bulk-dialog-overlay").addEventListener("mousedown", (event) => {
+    if (event.target === event.currentTarget) closePromptBulkDialog();
   });
   $("#mask-auto-subject-button").addEventListener("click", autoSubjectSelection);
   $("#close-bg-removal-button").addEventListener("click", closeBgRemoval);

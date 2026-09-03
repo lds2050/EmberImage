@@ -1014,6 +1014,17 @@ function registerIpcHandlers() {
     return storage.updatePrompt(String(payload?.id), patch);
   }));
   ipcMain.handle("prompts:delete", withResult(async (id) => ({ deleted: await storage.removePrompt(String(id)) })));
+  ipcMain.handle("prompts:favorite", withResult(async (payload) => storage.setPromptFavorite(String(payload?.id), payload?.favorite === true)));
+  ipcMain.handle("prompts:record-usage", withResult(async (id) => storage.recordPromptUsage(String(id))));
+  ipcMain.handle("prompts:bulk-delete", withResult(async (ids) => ({ deleted: await storage.removePrompts(Array.isArray(ids) ? ids : []) })));
+  ipcMain.handle("prompts:bulk-category", withResult(async (payload) => ({ updated: await storage.setPromptsCategory(
+    Array.isArray(payload?.ids) ? payload.ids : [],
+    typeof payload?.category === "string" ? payload.category : "",
+  ) })));
+  ipcMain.handle("prompts:rename-category", withResult(async (payload) => ({ updated: await storage.renamePromptCategory(
+    typeof payload?.from === "string" ? payload.from : "",
+    typeof payload?.to === "string" ? payload.to : "",
+  ) })));
   ipcMain.handle("logs:list", withResult(async () => storage.listLogs()));
   ipcMain.handle("logs:clear", withResult(async () => { await storage.clearLogs(); return { cleared: true }; }));
   ipcMain.handle("image:save", withResult(saveImage));
