@@ -42,6 +42,7 @@
     viewerRemoveBgAsset: null,
     prompts: [],
     editingPromptId: null,
+    promptFilter: { query: "", category: "" },
   };
 
   function unwrap(result) {
@@ -2192,8 +2193,6 @@
       if (state.favoriteOnly && !entry.favorite) return false;
       return !query || `${entry.prompt} ${entry.model} ${entry.connectionName || ""}`.toLowerCase().includes(query);
     });
-    $("#history-count").textContent = state.history.length;
-    $("#history-summary").textContent = `共 ${filtered.length} 条记录`;
     $("#favorite-filter-button").classList.toggle("active", state.favoriteOnly);
     $("#favorite-filter-button").textContent = state.favoriteOnly ? "★ 只看收藏" : "☆ 只看收藏";
     const list = $("#history-list");
@@ -2220,6 +2219,7 @@
         </div>
         <div class="history-card-menu hidden">
           <button type="button" data-action="reuse">复用提示词</button>
+          <button type="button" data-action="save-prompt">存入提示词库</button>
           ${isEditEntry ? '<button type="button" data-action="reedit">按原参数再次编辑</button>' : '<button type="button" data-action="regenerate">再生成一张</button>'}
           <button type="button" data-action="continue-edit">继续编辑</button>
           <button type="button" data-action="copy">复制原图到剪贴板</button>
@@ -2242,6 +2242,7 @@
         if (!action) return;
         menu.classList.add("hidden");
         if (action === "reuse") restoreEntryParameters(entry, true);
+        if (action === "save-prompt") await savePromptToLibrary(entry.prompt, entry.id);
         if (action === "regenerate") { restoreEntryParameters(entry); $("#count-input").value = 1; updateGenerationState(); await generate({ forceOne: true }); }
         if (action === "reedit") await restoreEditFromHistory(entry);
         if (action === "continue-edit") continueEditingFromImage(image);
@@ -2272,18 +2273,46 @@
     catch (error) { toast(error.message, "error"); }
   }
 
+  function promptMatchesFilter(entry) {
+    if (state.promptFilter.category && entry.category !== state.promptFilter.category) return false;
+    const tokens = state.promptFilter.query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return true;
+    const haystack = `${entry.text} ${entry.category}`.toLowerCase();
+    return tokens.every((token) => haystack.includes(token));
+  }
+
+  function renderPromptFilterRow(categories) {
+    const row = $("#prompt-filter-row");
+    const active = state.promptFilter.category;
+    const chips = [{ label: "全部", value: "", count: state.prompts.length }]
+      .concat(categories.map((name) => ({ label: name, value: name, count: state.prompts.filter((entry) => entry.category === name).length })));
+    row.innerHTML = chips.map((chip) => `
+      <button class="prompt-filter-chip${chip.value === active ? " active" : ""}" type="button" data-category="${escapeHtml(chip.value)}">
+        ${escapeHtml(chip.label)}<span>${chip.count}</span>
+      </button>`).join("");
+    row.classList.toggle("hidden", state.prompts.length === 0);
+    $$("#prompt-filter-row .prompt-filter-chip").forEach((chip) => chip.addEventListener("click", () => {
+      state.promptFilter.category = chip.dataset.category;
+      renderPrompts();
+    }));
+  }
+
   function renderPrompts() {
-    $("#prompts-count").textContent = state.prompts.length;
-    $("#prompts-summary").textContent = `共 ${state.prompts.length} 条提示词`;
     const list = $("#prompts-list");
     list.innerHTML = "";
-    $("#prompts-empty").classList.toggle("hidden", state.prompts.length > 0);
-    list.classList.toggle("hidden", state.prompts.length === 0);
-    const sorted = [...state.prompts].sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
-    $("#prompt-category-options").innerHTML = [...new Set(state.prompts.map((entry) => entry.category).filter(Boolean))]
-      .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"))
+    const categories = [...new Set(state.prompts.map((entry) => entry.category).filter(Boolean))]
+      .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
+    if (state.promptFilter.category && !categories.includes(state.promptFilter.category)) state.promptFilter.category = "";
+    renderPromptFilterRow(categories);
+    $("#prompt-category-options").innerHTML = categories
       .map((name) => `<option value="${escapeHtml(name)}"></option>`)
       .join("");
+    const filtered = state.prompts.filter(promptMatchesFilter);
+    const hasAny = state.prompts.length > 0;
+    $("#prompts-empty").classList.toggle("hidden", hasAny);
+    $("#prompts-nomatch").classList.toggle("hidden", !(hasAny && filtered.length === 0));
+    list.classList.toggle("hidden", filtered.length === 0);
+    const sorted = [...filtered].sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
     sorted.forEach((entry) => {
       const card = document.createElement("article");
       card.className = "prompt-entry";
@@ -2296,6 +2325,7 @@
         </div>
         <div class="history-card-menu hidden">
           <button type="button" data-action="use">用于生成</button>
+          <button type="button" data-action="copy">复制文本</button>
           <button type="button" data-action="edit">编辑</button>
           <button class="danger" type="button" data-action="delete">删除</button>
         </div>`;
@@ -2314,6 +2344,10 @@
         if (!action) return;
         menu.classList.add("hidden");
         if (action === "use") usePromptEntry(entry);
+        if (action === "copy") {
+          try { await navigator.clipboard.writeText(entry.text || ""); toast("提示词已复制"); }
+          catch { toast("复制失败，请手动选择文本", "error"); }
+        }
         if (action === "edit") openPromptDialog(entry);
         if (action === "delete" && window.confirm("删除这条提示词？")) {
           try { unwrap(await api.deletePrompt(entry.id)); await loadPrompts(); toast("提示词已删除"); }
@@ -2325,13 +2359,30 @@
   }
 
   function usePromptEntry(entry) {
+    // 先切模式（会恢复各模式记忆并覆盖输入框），再填入提示词，最后同步模式记忆防止来回切换丢失
+    setCreationMode("generate");
     $("#prompt-input").value = entry.text || "";
+    ensureModeMemory().generate.prompt = $("#prompt-input").value;
     updateGenerationState();
     navigate("generate");
     const promptInput = $("#prompt-input");
     promptInput.focus();
     promptInput.setSelectionRange(0, 0);
     promptInput.scrollTop = 0;
+  }
+
+  async function savePromptToLibrary(text, sourceHistoryId = null) {
+    const trimmed = String(text || "").trim();
+    if (!trimmed) { toast("提示词为空，先写点什么再存吧", "error"); return; }
+    try {
+      const existing = unwrap(await api.listPrompts());
+      if (existing.some((entry) => entry.text === trimmed)) { toast("提示词库已有这条内容"); return; }
+      unwrap(await api.addPrompt({ text: trimmed, category: "", sourceHistoryId }));
+      await loadPrompts();
+      toast("已存入提示词库");
+    } catch (error) {
+      toast(error.message, "error");
+    }
   }
 
   function openPromptDialog(entry = null) {
@@ -2533,6 +2584,17 @@
   $("#mask-selection-apply-button").addEventListener("click", applySelectionAsMask);
   $("#add-prompt-button").addEventListener("click", () => openPromptDialog());
   $("#empty-add-prompt-button").addEventListener("click", () => openPromptDialog());
+  $("#prompts-search").addEventListener("input", () => {
+    state.promptFilter.query = $("#prompts-search").value.trim();
+    renderPrompts();
+  });
+  $("#clear-prompt-filter-button").addEventListener("click", () => {
+    state.promptFilter = { query: "", category: "" };
+    $("#prompts-search").value = "";
+    renderPrompts();
+  });
+  $("#save-prompt-to-library").addEventListener("click", () => savePromptToLibrary($("#prompt-input").value));
+  $("#open-prompt-library").addEventListener("click", () => navigate("prompts"));
   $("#close-prompt-dialog-button").addEventListener("click", closePromptDialog);
   $("#cancel-prompt-dialog-button").addEventListener("click", closePromptDialog);
   $("#save-prompt-dialog-button").addEventListener("click", savePromptDialog);

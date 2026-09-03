@@ -167,16 +167,6 @@ summary:focus-visible {
   stroke-linejoin: round;
 }
 
-.nav-count {
-  min-width: 22px;
-  padding: 2px 7px;
-  color: #d9d6ce;
-  background: #4a4947;
-  border-radius: 999px;
-  font-size: 11px;
-  text-align: center;
-}
-
 .sidebar-spacer {
   flex: 1;
 }
@@ -1717,11 +1707,6 @@ summary:focus-visible {
   border: 0;
   outline: 0;
   font-size: 12px;
-}
-
-#history-summary {
-  color: var(--muted);
-  font-size: 11px;
 }
 
 .history-toolbar-actions {
@@ -3373,6 +3358,42 @@ summary:focus-visible {
 }
 
 /* ---- v0.5.4：提示词库 ---- */
+
+.prompt-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.prompt-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.prompt-filter-chip span {
+  color: var(--muted-light);
+  font-size: 10px;
+}
+
+.prompt-filter-chip.active {
+  color: var(--ink);
+  background: var(--surface-strong);
+  border-color: var(--ink);
+}
+
+.prompt-filter-chip.active span {
+  color: var(--muted);
+}
 
 .prompts-grid {
   display: grid;
