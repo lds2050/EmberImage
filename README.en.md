@@ -215,6 +215,12 @@ EmberImage uses the OS `userData` directory. Deleting a single history entry mov
 
 ---
 
+## Friends
+
+- [Linux.do](https://linux.do/) — Chinese developer community
+
+---
+
 <p align="center">
   <sub>Maintained by <a href="https://github.com/lds2050">lds2050</a> · Local-first · Privacy-first · 🔥</sub>
 </p>

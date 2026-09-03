@@ -215,6 +215,12 @@ EmberImage 使用系统的 `userData` 目录。单条历史「删除」把对应
 
 ---
 
+## 友情链接
+
+- [Linux.do](https://linux.do/) — 中文开发者社区
+
+---
+
 <p align="center">
   <sub>由 <a href="https://github.com/lds2050">lds2050</a> 维护 · 本地优先 · 隐私优先 · 🔥</sub>
 </p>
