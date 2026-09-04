@@ -36,10 +36,10 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -57,7 +57,7 @@ jobs:
         run: npm run ${{ matrix.script }}
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.path }}
@@ -71,10 +71,10 @@ jobs:
 
     steps:
       - name: Check out release notes
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Download installers
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           path: installers
           merge-multiple: true
