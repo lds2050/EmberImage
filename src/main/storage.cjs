@@ -34,6 +34,47 @@ const PROMPT_TEXT_LIMIT = 32000;
 const PROMPT_CATEGORY_LIMIT = 24;
 const PROMPT_DEFAULT_CATEGORY = "未分类";
 
+const SESSIONS_VERSION = 1;
+const SESSIONS_LIMIT = 50;
+const SESSION_TURNS_LIMIT = 20;
+const SESSION_TITLE_LIMIT = 40;
+const SESSION_MODES = ["chained", "native"];
+
+function normalizeSessionTurn(turn, index) {
+  const item = turn && typeof turn === "object" ? turn : {};
+  const resultFiles = Array.isArray(item.resultFiles)
+    ? item.resultFiles.filter((file) => typeof file === "string" && file).slice(0, 16)
+    : [];
+  return {
+    index: Number.isInteger(item.index) ? item.index : index,
+    entryId: typeof item.entryId === "string" && item.entryId ? item.entryId : null,
+    prompt: typeof item.prompt === "string" ? item.prompt.slice(0, PROMPT_TEXT_LIMIT) : "",
+    baseTurn: Number.isInteger(item.baseTurn) ? item.baseTurn : null,
+    inputSnapshot: typeof item.inputSnapshot === "string" && item.inputSnapshot ? item.inputSnapshot : null,
+    resultFiles,
+    chosen: Number.isInteger(item.chosen) && item.chosen >= 0 && item.chosen < resultFiles.length ? item.chosen : 0,
+  };
+}
+
+function normalizeSessionEntry(entry) {
+  const item = entry && typeof entry === "object" ? entry : {};
+  const mode = SESSION_MODES.includes(item.mode) ? item.mode : "chained";
+  const turns = Array.isArray(item.turns) ? item.turns.slice(0, SESSION_TURNS_LIMIT) : [];
+  const nativeHistory = Array.isArray(item.nativeHistory) ? item.nativeHistory : [];
+  return {
+    id: typeof item.id === "string" && item.id ? item.id : crypto.randomUUID(),
+    createdAt: typeof item.createdAt === "string" && item.createdAt ? item.createdAt : null,
+    updatedAt: typeof item.updatedAt === "string" && item.updatedAt ? item.updatedAt : null,
+    title: typeof item.title === "string" ? item.title.trim().slice(0, SESSION_TITLE_LIMIT) : "",
+    provider: typeof item.provider === "string" && item.provider ? item.provider : "openai",
+    model: typeof item.model === "string" && item.model ? item.model : "",
+    connectionId: typeof item.connectionId === "string" && item.connectionId ? item.connectionId : null,
+    mode,
+    turns: turns.map((turn, index) => normalizeSessionTurn(turn, index)),
+    nativeHistory,
+  };
+}
+
 function normalizePromptEntry(entry) {
   const item = entry && typeof entry === "object" ? entry : {};
   const text = typeof item.text === "string" ? item.text.trim().slice(0, PROMPT_TEXT_LIMIT) : "";
@@ -68,10 +109,12 @@ class AppStorage {
     this.configPath = path.join(rootDirectory, "config.json");
     this.historyPath = path.join(rootDirectory, "history.json");
     this.promptsPath = path.join(rootDirectory, "prompts.json");
+    this.sessionsPath = path.join(rootDirectory, "sessions.json");
     this.logsPath = path.join(rootDirectory, "request-logs.json");
     this.deviceKeyPath = path.join(rootDirectory, "device-encryption.key");
     this.resultsDirectory = path.join(rootDirectory, "results");
     this.historyMediaDirectory = path.join(rootDirectory, "history-media");
+    this.sessionMediaDirectory = path.join(rootDirectory, "session-media");
     this.tmpDirectory = path.join(rootDirectory, "tmp");
     this.thumbsDirectory = path.join(rootDirectory, "thumbs");
     this.fileQueues = new Map();
@@ -91,6 +134,7 @@ class AppStorage {
   async initialize() {
     await fs.mkdir(this.resultsDirectory, { recursive: true, mode: 0o700 });
     await fs.mkdir(this.historyMediaDirectory, { recursive: true, mode: 0o700 });
+    await fs.mkdir(this.sessionMediaDirectory, { recursive: true, mode: 0o700 });
     await this.resetEphemeralDirectories();
     await this.migrateHistory();
   }
@@ -367,6 +411,88 @@ class AppStorage {
       await this.writeJson(this.promptsPath, { version: PROMPTS_VERSION, entries: next });
       return updated;
     });
+  }
+
+  async _readSessionEntries() {
+    const stored = await this.readJson(this.sessionsPath, null);
+    const entries = stored && Array.isArray(stored.entries) ? stored.entries : [];
+    return entries.map((entry) => normalizeSessionEntry(entry));
+  }
+
+  // 列表用摘要：nativeHistory 可能很大（含历史轮图片 base64），不进列表载荷。
+  async listSessions() {
+    const entries = await this._readSessionEntries();
+    return entries.map(({ nativeHistory, ...summary }) => ({ ...summary, turnCount: summary.turns.length }));
+  }
+
+  async getSession(id) {
+    const entries = await this._readSessionEntries();
+    const found = entries.find((entry) => entry.id === id);
+    return found || null;
+  }
+
+  async addSession(entry) {
+    return this.runExclusive(this.sessionsPath, async () => {
+      const stored = await this.readJson(this.sessionsPath, null);
+      const entries = stored && Array.isArray(stored.entries) ? stored.entries : [];
+      if (entries.length >= SESSIONS_LIMIT) throw Object.assign(new Error(`会话数已达上限（${SESSIONS_LIMIT} 个），请先删除旧会话`), { code: "session_limit_reached" });
+      if (!Array.isArray(entry?.turns) || entry.turns.length === 0) throw Object.assign(new Error("会话至少需要一轮记录"), { code: "session_empty" });
+      const normalized = normalizeSessionEntry(entry);
+      const now = new Date().toISOString();
+      normalized.createdAt = normalized.createdAt || now;
+      normalized.updatedAt = now;
+      entries.unshift(normalized);
+      await this.writeJson(this.sessionsPath, { version: SESSIONS_VERSION, entries });
+      return normalized;
+    });
+  }
+
+  async updateSession(id, changes) {
+    return this.runExclusive(this.sessionsPath, async () => {
+      const stored = await this.readJson(this.sessionsPath, null);
+      const entries = stored && Array.isArray(stored.entries) ? stored.entries : [];
+      const index = entries.findIndex((entry) => entry.id === id);
+      if (index < 0) return null;
+      const patch = changes && typeof changes === "object" ? changes : {};
+      const merged = normalizeSessionEntry({ ...entries[index], ...patch, id: entries[index].id });
+      merged.createdAt = entries[index].createdAt;
+      merged.updatedAt = new Date().toISOString();
+      entries[index] = merged;
+      await this.writeJson(this.sessionsPath, { version: SESSIONS_VERSION, entries });
+      return merged;
+    });
+  }
+
+  async appendSessionTurn(id, turn) {
+    return this.runExclusive(this.sessionsPath, async () => {
+      const stored = await this.readJson(this.sessionsPath, null);
+      const entries = stored && Array.isArray(stored.entries) ? stored.entries : [];
+      const index = entries.findIndex((entry) => entry.id === id);
+      if (index < 0) return null;
+      const session = entries[index];
+      if (session.turns.length >= SESSION_TURNS_LIMIT) {
+        throw Object.assign(new Error(`单会话最多 ${SESSION_TURNS_LIMIT} 轮，请基于当前结果新开会话`), { code: "session_turn_limit_reached" });
+      }
+      const normalized = normalizeSessionTurn(turn, session.turns.length);
+      session.turns.push(normalized);
+      session.updatedAt = new Date().toISOString();
+      await this.writeJson(this.sessionsPath, { version: SESSIONS_VERSION, entries });
+      return session;
+    });
+  }
+
+  async removeSession(id) {
+    return this.runExclusive(this.sessionsPath, async () => {
+      const stored = await this.readJson(this.sessionsPath, null);
+      const entries = stored && Array.isArray(stored.entries) ? stored.entries : [];
+      const next = entries.filter((entry) => entry.id !== id);
+      await this.writeJson(this.sessionsPath, { version: SESSIONS_VERSION, entries: next });
+      return next.length !== entries.length;
+    });
+  }
+
+  sessionMediaDir(sessionId) {
+    return path.join(this.sessionMediaDirectory, this._safeSegment(sessionId));
   }
 
   async createTaskTempDir(taskId) {

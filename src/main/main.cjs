@@ -1115,6 +1115,114 @@ async function copyImage(filePath) {
   return { copied: true };
 }
 
+// ---------------------------------------------------------------------------
+// Sessions (v0.7.0 multi-turn editing, stage A: create/list/get/delete/choose)
+// ---------------------------------------------------------------------------
+
+function sessionPreviewUrl(filePath) {
+  if (!filePath) return null;
+  try {
+    storage.assertAllowedPath(filePath, storage.rootDirectory);
+    return pathToFileURL(filePath).toString();
+  } catch {
+    return null; // Referenced file was moved/deleted outside the session — render gracefully.
+  }
+}
+
+function hydrateSession(session) {
+  return {
+    ...session,
+    turns: (session.turns || []).map((turn) => ({
+      ...turn,
+      resultUrls: (turn.resultFiles || []).map((file) => sessionPreviewUrl(file)).filter(Boolean),
+      inputUrl: sessionPreviewUrl(turn.inputSnapshot),
+    })),
+  };
+}
+
+function sessionSummary(session) {
+  const firstTurn = session.turns?.[0];
+  const coverPath = firstTurn ? firstTurn.resultFiles?.[firstTurn.chosen] : null;
+  return {
+    id: session.id,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    title: session.title,
+    provider: session.provider,
+    model: session.model,
+    connectionId: session.connectionId,
+    mode: session.mode,
+    turnCount: session.turns?.length || 0,
+    coverUrl: sessionPreviewUrl(coverPath),
+  };
+}
+
+async function createSessionFromResult(payload) {
+  const entryId = String(payload?.entryId || "");
+  const history = await storage.listHistory();
+  const entry = history.find((item) => item.id === entryId);
+  if (!entry) throw new AppError("原始记录不存在，无法创建会话", { code: "session_source_missing" });
+  const resultFiles = (entry.images || []).map((image) => image.path).filter(Boolean);
+  if (!resultFiles.length) throw new AppError("该记录没有结果图片，无法创建会话", { code: "session_source_missing" });
+  const chosen = Number.isInteger(payload?.imageIndex) && payload.imageIndex >= 0 && payload.imageIndex < resultFiles.length
+    ? payload.imageIndex
+    : 0;
+  const fallbackProvider = entry.provider;
+  let fallbackModel = entry.model;
+  let effectiveProvider = fallbackProvider;
+  if (!fallbackProvider || !fallbackModel) {
+    try {
+      const profile = getProfile(await loadRuntimeConfig());
+      effectiveProvider = effectiveProvider || profile.provider;
+      fallbackModel = fallbackModel || profile.model;
+    } catch { /* No active connection — fields stay empty. */ }
+  }
+  const session = await storage.addSession({
+    title: (entry.prompt || "").trim(),
+    provider: effectiveProvider || "openai",
+    model: fallbackModel || "",
+    connectionId: entry.connectionId || null,
+    // Gemini will switch to "native" once stage C lands; recording the intent now
+    // keeps stage B append-turn logic provider-agnostic.
+    mode: effectiveProvider === "gemini" ? "native" : "chained",
+    turns: [{
+      index: 0,
+      entryId: entry.id,
+      prompt: entry.prompt || "",
+      baseTurn: null,
+      inputSnapshot: entry.inputs?.[0]?.storedPath || null,
+      resultFiles,
+      chosen,
+    }],
+  });
+  return hydrateSession(session);
+}
+
+async function chooseSessionBase(payload) {
+  const id = String(payload?.id || "");
+  const turnIndex = Number(payload?.turnIndex);
+  const chosen = Number(payload?.chosen);
+  const session = await storage.getSession(id);
+  if (!session) throw new AppError("会话不存在", { code: "session_missing" });
+  const turn = session.turns.find((item) => item.index === turnIndex);
+  if (!turn) throw new AppError("轮次不存在", { code: "session_turn_missing" });
+  if (!Number.isInteger(chosen) || chosen < 0 || chosen >= turn.resultFiles.length) {
+    throw new AppError("基准图编号无效", { code: "session_base_invalid" });
+  }
+  const turns = session.turns.map((item) => (item.index === turnIndex ? { ...item, chosen } : item));
+  const updated = await storage.updateSession(id, { turns });
+  return updated ? hydrateSession(updated) : null;
+}
+
+async function deleteSessionEntry(id) {
+  const removed = await storage.removeSession(String(id));
+  if (!removed) return { deleted: false };
+  const mediaDir = storage.sessionMediaDir(String(id));
+  try { await fs.access(mediaDir); await shell.trashItem(mediaDir); }
+  catch { /* No session media to remove. */ }
+  return { deleted: true };
+}
+
 async function deleteHistoryEntry(id) {
   const history = await storage.listHistory();
   const entry = history.find((item) => item.id === id);
@@ -1164,6 +1272,14 @@ function registerIpcHandlers() {
   }));
   ipcMain.handle("history:delete", withResult(async (id) => deleteHistoryEntry(String(id))));
   ipcMain.handle("history:clear", withResult(async () => { await storage.clearHistory(); return { cleared: true }; }));
+  ipcMain.handle("session:create", withResult((payload) => createSessionFromResult(payload || {})));
+  ipcMain.handle("session:list", withResult(async () => (await storage.listSessions()).map(sessionSummary)));
+  ipcMain.handle("session:get", withResult(async (id) => {
+    const session = await storage.getSession(String(id));
+    return session ? hydrateSession(session) : null;
+  }));
+  ipcMain.handle("session:choose-base", withResult((payload) => chooseSessionBase(payload || {})));
+  ipcMain.handle("session:delete", withResult(async (id) => deleteSessionEntry(String(id))));
   ipcMain.handle("prompts:list", withResult(async () => storage.listPrompts()));
   ipcMain.handle("prompts:add", withResult(async (payload) => storage.addPrompt({
     text: typeof payload?.text === "string" ? payload.text : "",
@@ -1235,6 +1351,9 @@ module.exports = {
     createGeneration,
     saveMask,
     cancelTask,
+    createSessionFromResult,
+    chooseSessionBase,
+    deleteSessionEntry,
     setStorage: (value) => { storage = value; },
     setTimeoutOverrideMs: (value) => { testTimeoutOverrideMs = value; },
     getActiveRequestTaskId: () => activeRequestTaskId,

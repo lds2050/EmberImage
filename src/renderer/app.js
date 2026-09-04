@@ -52,6 +52,10 @@
     promptBulkMode: false,
     promptBulkSelection: null,
     promptBulkDialogMode: null,
+    sessions: [],
+    sessionView: "list",
+    activeSessionId: null,
+    activeSession: null,
   };
 
   function unwrap(result) {
@@ -93,6 +97,7 @@
     $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.viewTarget === viewName));
     if (viewName === "history") loadHistory();
     if (viewName === "prompts") loadPrompts();
+    if (viewName === "sessions") loadSessions();
     if (viewName === "settings") loadLogs();
   }
 
@@ -2191,7 +2196,7 @@
         <img src="${escapeHtml(image.previewUrl)}" alt="生成结果 ${index + 1}" />
         <div class="result-card-footer">
           <span>${escapeHtml(image.format.toUpperCase())} · ${escapeHtml(formatBytes(image.bytes))}</span>
-          <div class="result-card-actions"><button type="button" data-action="save">下载</button><button type="button" data-action="reveal">文件位置</button><button type="button" data-action="continue">继续编辑</button></div>
+          <div class="result-card-actions"><button type="button" data-action="save">下载</button><button type="button" data-action="reveal">文件位置</button><button type="button" data-action="continue">继续编辑</button><button type="button" data-action="session-continue">会话继续</button></div>
         </div>`;
       card.querySelector('[data-action="save"]').addEventListener("click", async () => {
         try { const result = unwrap(await api.saveImage(image)); if (!result.canceled) toast("图片已保存"); }
@@ -2202,6 +2207,7 @@
         catch (error) { toast(error.message, "error"); }
       });
       card.querySelector('[data-action="continue"]').addEventListener("click", () => continueEditingFromImage(image));
+      card.querySelector('[data-action="session-continue"]').addEventListener("click", () => continueSessionFromImage(entry, image, index));
       card.querySelector("img").addEventListener("dblclick", () => openImageViewer(image.previewUrl, entry.prompt, { compareSrc: editCompareSrc(entry), maskSrc: editMaskSrc(entry) }));
       grid.append(card);
     });
@@ -2236,6 +2242,12 @@
       unsafe_image_url: ["图片地址不安全", "兼容接口返回了不安全的图片地址。"],
       missing_api_key: ["尚未加载密钥", "请前往设置输入 API Key，或完成旧版密钥迁移。"],
       invalid_response: ["响应格式不兼容", "服务已响应，但没有返回客户端可读取的图片。"],
+      session_limit_reached: ["会话数量已达上限", "最多保留 50 个会话，请在会话页删除不再需要的会话后重试。"],
+      session_turn_limit_reached: ["会话轮数已达上限", "单个会话最多 20 轮。可基于当前结果新开会话继续调整。"],
+      session_source_missing: ["无法创建会话", "原始记录不存在或没有结果图片。"],
+      session_missing: ["会话不存在", "该会话可能已被删除。"],
+      session_turn_missing: ["轮次不存在", "请刷新后重试。"],
+      session_base_invalid: ["基准图无效", "所选编号超出该轮结果范围。"],
     };
     const fallbackTitle = state.lastOperation === "edit" ? "编辑没有完成" : "生成没有完成";
     return messages[error.code] || [fallbackTitle, error.message || "请稍后重试。"];
@@ -2381,6 +2393,133 @@
 
   async function loadHistory() {
     try { state.history = unwrap(await api.listHistory()); renderHistory(); }
+    catch (error) { toast(error.message, "error"); }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sessions (v0.7.0 stage A: create / list / detail / delete — read-only turns)
+  // ---------------------------------------------------------------------------
+
+  function setSessionView(viewName) {
+    state.sessionView = viewName;
+    const listing = viewName === "list";
+    const hasSessions = state.sessions.length > 0;
+    $("#sessions-list").classList.toggle("hidden", !listing || !hasSessions);
+    $("#sessions-empty").classList.toggle("hidden", !listing || hasSessions);
+    $("#session-detail").classList.toggle("hidden", listing);
+    $("#back-to-session-list-button").classList.toggle("hidden", listing);
+  }
+
+  async function loadSessions() {
+    try {
+      state.sessions = unwrap(await api.listSessions());
+      if (state.sessionView === "list") { renderSessions(); setSessionView("list"); }
+      else renderSessions();
+    }
+    catch (error) { toast(error.message, "error"); }
+  }
+
+  function renderSessions() {
+    const list = $("#sessions-list");
+    list.innerHTML = "";
+    $("#sessions-count").textContent = state.sessions.length ? `${state.sessions.length} 个会话` : "";
+    state.sessions.forEach((session) => {
+      const card = document.createElement("article");
+      card.className = "prompt-entry session-entry";
+      card.innerHTML = `
+        <div class="session-cover">${session.coverUrl ? `<img src="${escapeHtml(session.coverUrl)}" alt="${escapeHtml(session.title)}" />` : '<span class="session-cover-fallback">◇</span>'}<span class="image-badge operation">${session.mode === "native" ? "原生多轮" : "会话链"} · ${session.turnCount} 轮</span></div>
+        <div class="prompt-copy">
+          <p class="session-title">${escapeHtml(session.title || "未命名会话")}</p>
+          <div class="history-card-footer"><span>${escapeHtml(session.model || "")} · ${escapeHtml(formatDate(session.updatedAt || session.createdAt))}</span><button class="history-menu-button" type="button" aria-label="更多操作">···</button></div>
+        </div>
+        <div class="history-card-menu hidden">
+          <button type="button" data-action="open">打开会话</button>
+          <button class="danger" type="button" data-action="delete">删除会话</button>
+        </div>`;
+      card.addEventListener("click", (event) => {
+        if (event.target.closest(".history-card-menu")) return;
+        openSession(session.id);
+      });
+      const menu = card.querySelector(".history-card-menu");
+      const menuButton = card.querySelector(".history-menu-button");
+      menuButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const opening = menu.classList.contains("hidden");
+        $$(".history-card-menu").forEach((node) => node.classList.add("hidden"));
+        menu.classList.toggle("hidden", !opening);
+        menuButton.classList.toggle("active", opening);
+      });
+      menu.addEventListener("click", async (event) => {
+        const action = event.target.closest("button")?.dataset.action;
+        if (!action) return;
+        menu.classList.add("hidden");
+        if (action === "open") openSession(session.id);
+        if (action === "delete" && window.confirm(`删除会话「${session.title || "未命名"}」？会话基准图将移到废纸篓，画廊中的历史记录不受影响。`)) {
+          try { unwrap(await api.deleteSession(session.id)); await loadSessions(); toast("会话已删除"); }
+          catch (error) { toast(error.message, "error"); }
+        }
+      });
+      list.append(card);
+    });
+  }
+
+  async function openSession(id) {
+    try {
+      const session = unwrap(await api.getSession(id));
+      if (!session) throw new Error("会话不存在");
+      state.activeSessionId = id;
+      state.activeSession = session;
+      state.sessionView = "detail";
+      renderSessionDetail(session);
+      setSessionView("detail");
+    }
+    catch (error) { toast(error.message, "error"); }
+  }
+
+  function renderSessionDetail(session) {
+    const detail = $("#session-detail");
+    detail.innerHTML = "";
+    const head = document.createElement("div");
+    head.className = "session-detail-head";
+    head.innerHTML = `
+      <div>
+        <h3 class="session-title">${escapeHtml(session.title || "未命名会话")}</h3>
+        <p class="session-meta">${escapeHtml(session.model || "")} · ${session.mode === "native" ? "原生多轮" : "会话链"} · ${session.turns.length} 轮 · 更新于 ${escapeHtml(formatDate(session.updatedAt || session.createdAt))}</p>
+      </div>`;
+    detail.append(head);
+    session.turns.forEach((turn) => {
+      const item = document.createElement("article");
+      item.className = "session-turn";
+      const images = turn.resultUrls.map((url) => `<img src="${escapeHtml(url)}" alt="第 ${turn.index + 1} 轮结果" loading="lazy" />`).join("");
+      const inputNote = turn.inputUrl ? `<div class="session-turn-input"><img src="${escapeHtml(turn.inputUrl)}" alt="本轮输入基准" loading="lazy" /><span>本轮基准</span></div>` : "";
+      item.innerHTML = `
+        <div class="session-turn-marker"><span>${turn.index + 1}</span></div>
+        <div class="session-turn-body">
+          <p class="session-turn-prompt">${escapeHtml(turn.prompt || "（无提示词）")}</p>
+          ${inputNote}
+          <div class="session-turn-images">${images || '<span class="session-turn-missing">结果图已被删除</span>'}</div>
+        </div>`;
+      item.querySelectorAll(".session-turn-images img").forEach((node, index) => {
+        node.addEventListener("dblclick", () => openImageViewer(turn.resultUrls[index], turn.prompt, {}));
+      });
+      detail.append(item);
+    });
+  }
+
+  function backToSessionList() {
+    state.activeSessionId = null;
+    state.activeSession = null;
+    state.sessionView = "list";
+    setSessionView("list");
+  }
+
+  async function continueSessionFromImage(entry, image, index) {
+    try {
+      const session = unwrap(await api.createSession({ entryId: entry.id, imageIndex: index }));
+      toast("会话已创建");
+      navigate("sessions"); // switches the view and refreshes the list in the background
+      await openSession(session.id);
+    }
     catch (error) { toast(error.message, "error"); }
   }
 
@@ -2786,6 +2925,7 @@
   });
 
   $$("[data-view-target]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.viewTarget)));
+  $("#back-to-session-list-button").addEventListener("click", backToSessionList);
   $("#open-settings-button").addEventListener("click", () => navigate("settings"));
   $("#prompt-input").addEventListener("input", updateGenerationState);
   $("#clear-prompt").addEventListener("click", () => { $("#prompt-input").value = ""; updateGenerationState(); $("#prompt-input").focus(); });
