@@ -193,3 +193,37 @@ test("initialize creates the session-media directory and sessionMediaDir sanitiz
     assert.throws(() => storage.sessionMediaDir(""), /无效的目录名称/);
   });
 });
+
+test("native reply files round-trip and reject poisoned names", async () => {
+  await withStorage(async (storage, directory) => {
+    const added = await storage.addSession(sessionOverrides());
+    const reply = { role: "model", parts: [{ inlineData: { mimeType: "image/png", data: "AAAA" } }, { thoughtSignature: "sig-1" }] };
+    const fileName = await storage.writeSessionNativeReply(added.id, 1, reply);
+    assert.equal(fileName, "turn-1.json");
+    const stored = await storage.readSessionNativeReply(added.id, fileName);
+    assert.deepEqual(stored, reply);
+
+    // Missing or corrupt files read as null so replay can shrink its suffix.
+    assert.equal(await storage.readSessionNativeReply(added.id, "turn-99.json"), null);
+    await fs.writeFile(await Promise.resolve(path.join(storage.sessionNativeDir(added.id), "turn-2.json")), "{broken");
+    assert.equal(await storage.readSessionNativeReply(added.id, "turn-2.json"), null);
+
+    // Path traversal via a poisoned sessions.json entry never escapes the dir.
+    assert.throws(() => storage.sessionNativeFilePath(added.id, "../escape.json"), /无效的原生回放文件名/);
+    assert.throws(() => storage.sessionNativeFilePath(added.id, "../../evil.json"), /无效的原生回放文件名/);
+    const resolved = storage.sessionNativeFilePath(added.id, "turn-1.json");
+    assert.ok(resolved.startsWith(path.join(directory, "session-media", added.id, "native")));
+  });
+});
+
+test("normalizeSessionTurn keeps nativeReplyFile on read-back", async () => {
+  await withStorage(async (storage) => {
+    const withReply = sessionOverrides({
+      turns: [{ ...sessionOverrides().turns[0], nativeReplyFile: "turn-0.json" }],
+    });
+    const added = await storage.addSession(withReply);
+    assert.equal(added.turns[0].nativeReplyFile, "turn-0.json");
+    const reread = await storage.getSession(added.id);
+    assert.equal(reread.turns[0].nativeReplyFile, "turn-0.json");
+  });
+});

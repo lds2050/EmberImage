@@ -64,6 +64,10 @@ function normalizeSessionTurn(turn, index) {
     createdAt: typeof item.createdAt === "string" && item.createdAt ? item.createdAt : null,
     completedAt: typeof item.completedAt === "string" && item.completedAt ? item.completedAt : null,
     parameters,
+    // Native sessions (Gemini multi-turn): file name inside session-media/<id>/native/
+    // holding this turn's verbatim model content (inlineData + thoughtSignature) for
+    // replay. Kept on disk because a base64 reply would bloat sessions.json.
+    nativeReplyFile: typeof item.nativeReplyFile === "string" && item.nativeReplyFile ? item.nativeReplyFile : null,
   };
 }
 
@@ -507,6 +511,43 @@ class AppStorage {
 
   sessionMediaDir(sessionId) {
     return path.join(this.sessionMediaDirectory, this._safeSegment(sessionId));
+  }
+
+  sessionNativeDir(sessionId) {
+    return path.join(this.sessionMediaDir(sessionId), "native");
+  }
+
+  // Native replay files live at session-media/<id>/native/turn-<n>.json. The name
+  // is validated against a strict pattern so a poisoned sessions.json entry can
+  // never escape the session's native directory.
+  sessionNativeFilePath(sessionId, fileName) {
+    if (!/^turn-\d+\.json$/.test(String(fileName || ""))) throw new Error("无效的原生回放文件名");
+    return path.join(this.sessionNativeDir(sessionId), fileName);
+  }
+
+  // Persists one turn's verbatim model content ({ role: "model", parts: [...] })
+  // and returns the relative file name recorded on the turn.
+  async writeSessionNativeReply(sessionId, turnIndex, reply) {
+    const directory = this.sessionNativeDir(sessionId);
+    await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+    const fileName = `turn-${Number(turnIndex)}.json`;
+    const filePath = this.sessionNativeFilePath(sessionId, fileName);
+    await fs.writeFile(filePath, JSON.stringify(reply), { mode: 0o600 });
+    return fileName;
+  }
+
+  // Returns the stored model content, or null when the file is missing/corrupt —
+  // callers treat null as "this turn cannot be replayed natively".
+  async readSessionNativeReply(sessionId, fileName) {
+    try {
+      const filePath = this.sessionNativeFilePath(sessionId, fileName);
+      const raw = await fs.readFile(filePath, "utf8");
+      const reply = JSON.parse(raw);
+      if (!reply || reply.role !== "model" || !Array.isArray(reply.parts) || !reply.parts.length) return null;
+      return reply;
+    } catch {
+      return null;
+    }
   }
 
   async createTaskTempDir(taskId) {

@@ -210,3 +210,47 @@ test("capabilitiesOf reflects the active provider", () => {
   assert.equal(Providers.capabilitiesOf({ provider: "gemini" }).maskEdit, false);
   assert.equal(Providers.capabilitiesOf({}).maskEdit, true);
 });
+
+test("gemini adapter declares native session support; others do not", () => {
+  assert.equal(gemini.nativeSession, true);
+  assert.notEqual(Providers.resolveProvider({ provider: "openai" }).nativeSession, true);
+  assert.notEqual(Providers.resolveProvider({ provider: "seedream" }).nativeSession, true);
+});
+
+test("gemini buildSessionBody appends the new user turn to the replayed history", () => {
+  const history = [
+    { role: "user", parts: [{ inlineData: { mimeType: "image/png", data: "AAAA" } }, { text: "把背景换成森林" }] },
+    { role: "model", parts: [{ inlineData: { mimeType: "image/png", data: "BBBB" } }, { thoughtSignature: "sig-1" }] },
+  ];
+  const body = gemini.buildSessionBody({ history, userParts: [{ text: "再亮一点" }], size: "1024x1024" });
+  assert.equal(body.contents.length, 3);
+  assert.equal(body.contents[0].role, "user");
+  assert.equal(body.contents[1].role, "model");
+  assert.equal(body.contents[1].parts[1].thoughtSignature, "sig-1", "thoughtSignature echoed verbatim");
+  assert.deepEqual(body.contents[2], { role: "user", parts: [{ text: "再亮一点" }] });
+  assert.deepEqual(body.generationConfig.responseModalities, ["TEXT", "IMAGE"]);
+  assert.ok(body.generationConfig.imageConfig.aspectRatio);
+});
+
+test("gemini extractNativeReply stores the model content verbatim", () => {
+  const body = {
+    candidates: [{
+      content: { role: "model", parts: [{ inlineData: { mimeType: "image/png", data: "CCCC" } }, { thoughtSignature: "sig-2" }] },
+      finishReason: "STOP",
+    }],
+  };
+  const reply = gemini.extractNativeReply(body);
+  assert.equal(reply.role, "model");
+  assert.equal(reply.parts.length, 2);
+  assert.equal(reply.parts[1].thoughtSignature, "sig-2");
+  // Mutating the extracted copy must not touch the original payload.
+  reply.parts[0].inlineData.data = "XXXX";
+  assert.equal(body.candidates[0].content.parts[0].inlineData.data, "CCCC");
+});
+
+test("gemini extractNativeReply returns null for blocked or empty candidates", () => {
+  assert.equal(gemini.extractNativeReply({ candidates: [{ finishReason: "SAFETY" }] }), null);
+  assert.equal(gemini.extractNativeReply({ candidates: [{ content: { role: "model", parts: [] } }] }), null);
+  assert.equal(gemini.extractNativeReply({}), null);
+  assert.equal(gemini.extractNativeReply(null), null);
+});

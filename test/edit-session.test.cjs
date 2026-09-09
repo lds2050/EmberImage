@@ -73,7 +73,7 @@ function jsonEditResponse(bodyOf, extra) {
   };
 }
 
-async function withSessionEditHarness(handler, run) {
+async function withSessionEditHarness(handler, run, profileOverrides = {}) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "emberimage-edit-session-"));
   const appStorage = new AppStorage(dir);
   await appStorage.initialize();
@@ -83,7 +83,7 @@ async function withSessionEditHarness(handler, run) {
   const baseUrl = `http://127.0.0.1:${port}/v1`;
   await appStorage.saveConfig({
     activeConnectionId: "openai-default",
-    connections: [{ ...DEFAULT_PROFILE, baseUrl, requestTimeoutSeconds: 30 }],
+    connections: [{ ...DEFAULT_PROFILE, baseUrl, requestTimeoutSeconds: 30, ...profileOverrides }],
     downloadDirectory: "",
   });
   hooks.setStorage(appStorage);
@@ -338,7 +338,7 @@ test("sessionAppendTurn validates prompt, session, base turn, and base file", as
   );
 });
 
-test("a native-mode session continues through the chained pipeline in stage B", async () => {
+test("a native-mode session refuses to continue under a non-Gemini connection (D6)", async () => {
   const bodies = [];
   await withSessionEditHarness(
     jsonEditResponse((body) => bodies.push(body)),
@@ -347,15 +347,136 @@ test("a native-mode session continues through the chained pipeline in stage B", 
       const session = await hooks.createSessionFromResult({ entryId: entry.id });
       assert.equal(session.mode, "native");
 
-      // Stage C will switch native sessions to real multi-turn contents; until
-      // then the chained feed-back keeps every provider's session usable.
-      const { session: updated } = await hooks.sessionAppendTurn(
-        { id: session.id, prompt: "继续调整", taskId: "task-native" },
-        sender,
+      // PRD D6: native sessions may only continue under a Gemini connection —
+      // chained feed-back would silently drop the conversation context.
+      await assert.rejects(
+        hooks.sessionAppendTurn({ id: session.id, prompt: "继续调整", taskId: "task-native" }, sender),
+        (error) => error.code === "session_native_requires_gemini",
       );
-      assert.equal(bodies.length, 1);
-      assert.equal(updated.turns.length, 2);
-      assert.equal(updated.turns[1].baseTurn, 0);
+      assert.equal(bodies.length, 0, "D6 blocks native continuation before any API traffic");
     },
+  );
+});
+
+const GEMINI_PROFILE = { provider: "gemini", model: "gemini-3-pro-image-preview" };
+
+function geminiImageResponse(bodyOf) {
+  return (req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      bodyOf(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        candidates: [{
+          content: {
+            role: "model",
+            parts: [
+              { inlineData: { mimeType: "image/png", data: PNG_B64 } },
+              { thoughtSignature: "sig-turn" },
+            ],
+          },
+          finishReason: "STOP",
+        }],
+        usageMetadata: { totalBillableCharacterCount: 12 },
+      }));
+    });
+  };
+}
+
+test("a native session replays stored contents and echoes thoughtSignature verbatim", async () => {
+  const bodies = [];
+  await withSessionEditHarness(
+    geminiImageResponse((body) => bodies.push(body)),
+    async ({ storage, dir, sender }) => {
+      const { entry: seedEntry } = await seedEditEntry(storage, dir, { provider: "gemini", model: "gemini-3-pro-image-preview" });
+      const session = await hooks.createSessionFromResult({ entryId: seedEntry.id });
+      assert.equal(session.mode, "native");
+
+      // Turn 1: fresh session — one user turn carrying the base image + prompt.
+      const first = await hooks.sessionAppendTurn({ id: session.id, prompt: "调成黄昏", taskId: "task-native-1" }, sender);
+      assert.equal(bodies.length, 1);
+      assert.equal(bodies[0].contents.length, 1);
+      assert.equal(bodies[0].contents[0].role, "user");
+      assert.equal(bodies[0].contents[0].parts[0].inlineData.data, PNG_B64);
+      assert.equal(bodies[0].contents[0].parts[1].text, "调成黄昏");
+      assert.ok(bodies[0].generationConfig.responseModalities.includes("IMAGE"));
+      assert.equal(first.entry.sessionId, session.id);
+      assert.equal(first.entry.turnIndex, 1);
+      assert.match(first.session.turns[1].nativeReplyFile, /^turn-1\.json$/);
+
+      // The verbatim reply (thoughtSignature included) is persisted for replay.
+      const stored = await storage.readSessionNativeReply(session.id, first.session.turns[1].nativeReplyFile);
+      assert.equal(stored.role, "model");
+      assert.equal(stored.parts[1].thoughtSignature, "sig-turn");
+
+      // Turn 2: stored reply echoed verbatim, the new turn is text-only.
+      const second = await hooks.sessionAppendTurn({ id: session.id, prompt: "再加点雾", taskId: "task-native-2" }, sender);
+      assert.equal(bodies.length, 2);
+      const contents = bodies[1].contents;
+      assert.equal(contents.length, 3);
+      assert.equal(contents[0].role, "user");
+      assert.equal(contents[0].parts[0].inlineData.data, PNG_B64, "suffix restart re-attaches its input image");
+      assert.equal(contents[0].parts[1].text, "调成黄昏");
+      assert.equal(contents[1].role, "model");
+      assert.equal(contents[1].parts[1].thoughtSignature, "sig-turn", "reply echoed verbatim");
+      assert.deepEqual(contents[2], { role: "user", parts: [{ text: "再加点雾" }] });
+      assert.equal(second.session.turns[2].nativeReplyFile, "turn-2.json");
+      assert.equal(second.entry.turnIndex, 2);
+    },
+    GEMINI_PROFILE,
+  );
+});
+
+test("a native fork attaches the chosen image as a fresh user turn", async () => {
+  const bodies = [];
+  await withSessionEditHarness(
+    geminiImageResponse((body) => bodies.push(body)),
+    async ({ storage, dir, sender }) => {
+      const { entry: seedEntry } = await seedEditEntry(storage, dir, { provider: "gemini", model: "gemini-3-pro-image-preview" });
+      const session = await hooks.createSessionFromResult({ entryId: seedEntry.id });
+      await hooks.sessionAppendTurn({ id: session.id, prompt: "调成黄昏", taskId: "task-fork-1" }, sender);
+      assert.equal(bodies.length, 1);
+
+      // Fork to turn 0's second result: history still replays, but the chosen
+      // image rides along in the new user turn.
+      await hooks.sessionAppendTurn({ id: session.id, prompt: "基于最早的结果重画", taskId: "task-fork-2", baseTurn: 0, baseChosen: 1 }, sender);
+      const contents = bodies[1].contents;
+      assert.equal(contents.length, 3, "replayed user1 + model1 + fork user with image");
+      assert.deepEqual(contents[2], { role: "user", parts: [{ inlineData: { mimeType: "image/png", data: PNG_B64 } }, { text: "基于最早的结果重画" }] });
+    },
+    GEMINI_PROFILE,
+  );
+});
+
+test("native bodies over the 50MB limit are rejected before any traffic (D5)", async () => {
+  const bodies = [];
+  await withSessionEditHarness(
+    geminiImageResponse((body) => bodies.push(body)),
+    async ({ storage, dir, sender }) => {
+      const { entry: seedEntry } = await seedEditEntry(storage, dir, { provider: "gemini", model: "gemini-3-pro-image-preview" });
+      const session = await hooks.createSessionFromResult({ entryId: seedEntry.id });
+      const resultPath = session.turns[0].resultFiles[0];
+      const oversized = "A".repeat(51 * 1024 * 1024);
+      await storage.writeSessionNativeReply(session.id, 1, { role: "model", parts: [{ inlineData: { mimeType: "image/png", data: oversized } }] });
+      await storage.updateSession(session.id, {
+        turns: [...session.turns, {
+          index: 1,
+          entryId: seedEntry.id,
+          prompt: "填充轮",
+          baseTurn: 0,
+          inputSnapshot: resultPath,
+          resultFiles: [resultPath],
+          chosen: 0,
+          nativeReplyFile: "turn-1.json",
+        }],
+      });
+      await assert.rejects(
+        hooks.sessionAppendTurn({ id: session.id, prompt: "继续", taskId: "task-too-large" }, sender),
+        (error) => error.code === "session_too_large",
+      );
+      assert.equal(bodies.length, 0, "D5 rejects before any API traffic");
+    },
+    GEMINI_PROFILE,
   );
 });

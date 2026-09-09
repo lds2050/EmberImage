@@ -4051,3 +4051,13 @@ summary:focus-visible {
 .session-base-pick:focus-visible {
   opacity: 1;
 }
+
+.session-mode-hint {
+  padding: 7px 12px;
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 1.5;
+  background: var(--amber-soft, rgba(234, 168, 56, 0.14));
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}

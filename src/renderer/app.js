@@ -2257,6 +2257,8 @@
       session_base_invalid: ["基准图无效", "所选编号超出该轮结果范围。"],
       session_base_missing: ["基准图已丢失", "基准图可能随历史记录一起删除了，请换一张图作为基准。"],
       session_empty_prompt: ["请输入调整指令", "描述这一轮想怎么改，再发送。"],
+      session_native_requires_gemini: ["需要 Gemini 连接", "原生多轮会话只能在 Gemini 连接下继续，请先切换连接。"],
+      session_too_large: ["会话历史过大", "已超过 Gemini 50MB 请求上限，请基于当前结果新开会话继续调整。"],
     };
     const fallbackTitle = state.lastOperation === "edit" ? "编辑没有完成" : "生成没有完成";
     return messages[error.code] || [fallbackTitle, error.message || "请稍后重试。"];
@@ -2622,6 +2624,23 @@
     session.turns.forEach((turn) => chat.append(...sessionTurnBubbles(turn, base)));
     timeline.append(chat);
     renderSessionBaseChip();
+    updateSessionModeHint();
+  }
+
+  // PRD D6: native sessions may only continue under a Gemini connection. The
+  // hint shows as soon as the session opens so the error never surprises.
+  function updateSessionModeHint() {
+    const hint = $("#session-mode-hint");
+    if (!hint) return;
+    const session = state.activeSession;
+    const provider = activeProfile()?.provider;
+    if (session?.mode === "native" && provider && provider !== "gemini") {
+      hint.textContent = "原生多轮会话需在 Gemini 连接下继续，当前连接无法续写此会话";
+      hint.classList.remove("hidden");
+    } else {
+      hint.textContent = "";
+      hint.classList.add("hidden");
+    }
   }
 
   function updateSessionComposerState() {

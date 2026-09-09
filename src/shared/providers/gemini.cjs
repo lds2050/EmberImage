@@ -67,6 +67,9 @@ const geminiAdapter = {
   // generateContent returns a single image per call, so n > 1 is issued serially.
   batchLimit: 1,
   maxReferenceImages: MAX_REFERENCE_IMAGES,
+  // generateContent carries the full conversation in `contents`, so sessions on
+  // this provider replay real multi-turn history instead of feed-back chaining.
+  nativeSession: true,
 
   endpoints(baseUrl, profile) {
     const root = Validation.normalizeBaseUrl(baseUrl);
@@ -110,6 +113,34 @@ const geminiAdapter = {
       ...metadata,
       contents: [{ role: "user", parts: [...inlineParts(inputFiles), ...textParts] }],
     };
+  },
+
+  // Native multi-turn session request: replay the stored conversation verbatim
+  // (user/model pairs, including any thoughtSignature parts) and append the new
+  // user turn. Pure assembly — callers own validation and the size precheck.
+  buildSessionBody({ history, userParts, size } /* , profile */) {
+    return {
+      contents: [
+        ...(Array.isArray(history) ? history : []),
+        { role: "user", parts: Array.isArray(userParts) ? userParts : [] },
+      ],
+      generationConfig: {
+        responseModalities: ["TEXT", "IMAGE"],
+        imageConfig: { aspectRatio: resolveAspectRatio(size), imageSize: resolveImageSize(size) },
+      },
+    };
+  },
+
+  // Captures the model's reply content verbatim — inlineData images AND any
+  // thoughtSignature parts — so the next native turn can echo it back exactly.
+  // Returns null for blocked/empty candidates (no replayable content).
+  extractNativeReply(body) {
+    const candidate = Array.isArray(body?.candidates) ? body.candidates[0] : null;
+    const content = candidate?.content;
+    if (!content || !Array.isArray(content.parts) || !content.parts.length) return null;
+    // structuredClone keeps the stored copy independent from the response the
+    // parse layer still reads (parts nest inlineData objects).
+    return { role: content.role || "model", parts: structuredClone(content.parts) };
   },
 
   parseResponse(body) {

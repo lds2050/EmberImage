@@ -225,6 +225,26 @@ async function loadRuntimeConfig() {
   return config;
 }
 
+// Log scrubbing: JSON request payloads may carry base64 image bytes (native
+// session contents replay the whole conversation). Image base64 never reaches
+// the log file — the red line also covers paths we add later, so this walks
+// every object generically instead of special-casing endpoints.
+function redactSensitiveBody(value) {
+  if (Array.isArray(value)) return value.map(redactSensitiveBody);
+  if (value && typeof value === "object") {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (typeof item === "string" && (key === "b64_json" || (key === "data" && item.length > 1024))) {
+        out[key] = `[base64 已隐藏，共 ${item.length} 字符]`;
+      } else {
+        out[key] = redactSensitiveBody(item);
+      }
+    }
+    return out;
+  }
+  return value;
+}
+
 function requestDetails(profile, endpoint, method, body = null) {
   return {
     method,
@@ -235,7 +255,7 @@ function requestDetails(profile, endpoint, method, body = null) {
       Authorization: "Bearer [已隐藏]",
     },
     timeoutSeconds: profile.requestTimeoutSeconds,
-    body,
+    body: body ? redactSensitiveBody(body) : body,
   };
 }
 
@@ -520,8 +540,12 @@ async function readStreamingImages(response, taskId, sender, outputFormat) {
   return { data: images, usage };
 }
 
-async function createGeneration(request, sender) {
+// `options.nativeContents` / `options.sessionContext` (v0.7.0) are only passed
+// by native session turns — main-internal, unreachable from renderer IPC. The
+// ordinary generation path behaves exactly as before.
+async function createGeneration(request, sender, options = {}) {
   const taskId = safeTaskId(request.taskId);
+  const nativeContents = options?.nativeContents && typeof options.nativeContents === "object" ? options.nativeContents : null;
   if (activeRequestTaskId) throw new AppError("已有图片任务正在进行，请等待完成或取消", { code: "busy" });
   if (generationControllers.has(taskId)) throw new AppError("该任务已在生成中", { code: "duplicate_task" });
   activeRequestTaskId = taskId;
@@ -548,6 +572,7 @@ async function createGeneration(request, sender) {
     let requestCount = 0;
     let lastPayload = null;
     let usage = null;
+    let nativeReply = null;
 
     const armTimeout = () => {
       if (timeout) clearTimeout(timeout);
@@ -577,7 +602,9 @@ async function createGeneration(request, sender) {
       const rawImages = [];
       let remaining = requestedCount;
       while (remaining > 0) {
-        const payload = provider.buildGenerationBody({ ...request.parameters, n: Math.min(batchLimit, remaining), model: profile.model }, profile);
+        const payload = nativeContents
+          ? provider.buildSessionBody({ history: nativeContents.history, userParts: nativeContents.userParts, size: request.parameters.size }, profile)
+          : provider.buildGenerationBody({ ...request.parameters, n: Math.min(batchLimit, remaining), model: profile.model }, profile);
         // Fallback body for relays that reject stream parameters (see isStreamParamRejected).
         const nonStreamingPayload = { ...payload, stream: false };
         delete nonStreamingPayload.partial_images;
@@ -598,6 +625,10 @@ async function createGeneration(request, sender) {
         const parsed = provider.parseResponse(body);
         if (parsed.blocked) throw new AppError(blockedReasonMessage(parsed.blocked), { code: "content_blocked", requestId });
         if (!parsed.images.length) throw new AppError("响应中没有可用的图片数据", { code: "invalid_response", requestId });
+        // First successful reply of the turn becomes the replayable model content.
+        if (nativeContents && !nativeReply && typeof provider.extractNativeReply === "function") {
+          nativeReply = provider.extractNativeReply(body);
+        }
         rawImages.push(...parsed.images);
         usage = mergeUsage(usage, parsed.usage);
         remaining = requestedCount - rawImages.length;
@@ -632,6 +663,11 @@ async function createGeneration(request, sender) {
         connectionName: profile.name,
         providerHost: new URL(baseUrl).host,
         favorite: false,
+        // Session back-reference (v0.7.0), mirroring createEdit's stamp. The
+        // replayable reply is attached to the return value only, never stored
+        // in history.
+        sessionId: options.sessionContext?.sessionId || null,
+        turnIndex: Number.isInteger(options.sessionContext?.turnIndex) ? options.sessionContext.turnIndex : null,
         parameters: {
           size: request.parameters.size,
           quality: request.parameters.quality,
@@ -651,7 +687,9 @@ async function createGeneration(request, sender) {
       await storage.addHistory(entry);
       await addLog({ ...logBase(profile, "image_generation", endpoint), status: "success", httpStatus: responseStatus, durationMs: entry.durationMs, requestId, streamFallback: streamFellBack, request: requestDetails(profile, endpoint, "POST", lastPayload), response: { imageCount: images.length, requestCount, usage }, imageCount: images.length });
       await setConnectionCapability(profile.id, "generationCapability", "supported");
-      return hydrateEntry(entry);
+      const hydrated = hydrateEntry(entry);
+      if (nativeContents) hydrated.nativeReply = nativeReply;
+      return hydrated;
     } catch (error) {
       let nextError = error;
       if (error.name === "AbortError") {
@@ -1258,6 +1296,28 @@ async function chooseSessionBase(payload) {
   return updated ? hydrateSession(updated) : null;
 }
 
+// PRD D5: Gemini rejects request bodies over 50MB. Sessions cap at 20 turns
+// but 2K replies can still cross the line, so native bodies are measured and
+// rejected before any traffic instead of being silently trimmed.
+const NATIVE_BODY_LIMIT = 50 * 1024 * 1024;
+
+function mimeFromPath(filePath) {
+  const extension = path.extname(filePath || "").toLowerCase();
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".webp") return "image/webp";
+  return "image/png";
+}
+
+// Inline image + prompt as Gemini parts. Both results/ paths and session-media
+// snapshots are plain local files, so a fresh read works for either.
+async function nativeInlineParts(filePath, prompt) {
+  const bytes = await fs.readFile(filePath);
+  return [
+    { inlineData: { mimeType: mimeFromPath(filePath), data: bytes.toString("base64") } },
+    ...(prompt ? [{ text: prompt }] : []),
+  ];
+}
+
 async function sessionAppendTurn(payload, sender) {
   const id = String(payload?.id || "");
   const prompt = typeof payload?.prompt === "string" ? payload.prompt.trim() : "";
@@ -1281,9 +1341,6 @@ async function sessionAppendTurn(payload, sender) {
     throw new AppError("基准图文件已丢失（可能随历史记录一起删除了）", { code: "session_base_missing" });
   });
 
-  // chained 会话链：把基准图注册为临时素材并回灌为本轮首张输入，然后复用整条
-  // 编辑管线（单飞锁、批次循环、历史落盘）。会话轮固定非流式（PRD §3 非目标）。
-  const asset = await importAssetFromPath(baseFile);
   const parameters = {
     prompt,
     size: typeof payload?.size === "string" ? payload.size : "auto",
@@ -1296,16 +1353,74 @@ async function sessionAppendTurn(payload, sender) {
     stream: false,
     partialImages: 0,
   };
+
+  // Stage C: native sessions replay the stored Gemini conversation. Per PRD D6
+  // a native session may only continue under a Gemini connection — chained
+  // feed-back would silently drop the conversation context.
+  const isNativeMode = session.mode === "native";
+  let nativeProvider = null;
+  if (isNativeMode) {
+    const config = await loadRuntimeConfig();
+    nativeProvider = Providers.resolveProvider(getProfile(config));
+    if (nativeProvider.id !== "gemini" || nativeProvider.nativeSession !== true) {
+      throw new AppError("原生多轮会话需在 Gemini 连接下继续，请先切换到 Gemini 连接", { code: "session_native_requires_gemini" });
+    }
+  }
+
   let entry;
-  try {
-    entry = await createEdit(
-      { taskId: payload?.taskId, assetIds: [asset.id], parameters },
+  let nativeReply = null;
+  if (isNativeMode) {
+    // Replay the longest suffix of turns that still has a stored reply file.
+    // The first replayed turn re-attaches its input image so the conversation
+    // restart stays coherent; later turns are text-only (the model just saw
+    // its own output). Missing/corrupt reply files simply shorten the suffix.
+    const history = [];
+    let replayed = 0;
+    let lastReplayedIndex = -1;
+    for (let i = session.turns.length - 1; i >= 0; i -= 1) {
+      const turn = session.turns[i];
+      if (!turn.nativeReplyFile || !turn.inputSnapshot) break;
+      const reply = await storage.readSessionNativeReply(session.id, turn.nativeReplyFile);
+      if (!reply) break;
+      const userContent = replayed === 0
+        ? { role: "user", parts: await nativeInlineParts(turn.inputSnapshot, turn.prompt) }
+        : { role: "user", parts: [{ text: turn.prompt }] };
+      history.unshift(userContent, reply);
+      replayed += 1;
+      lastReplayedIndex = i;
+    }
+    // Continuing exactly from the last replayed reply's image needs no image;
+    // forks and non-default picks attach the chosen image as a fresh user turn.
+    const attachImage = replayed === 0 || !(baseTurnIndex === lastReplayedIndex && chosen === 0);
+    const userParts = attachImage
+      ? await nativeInlineParts(baseFile, prompt)
+      : [{ text: prompt }];
+    // PRD D5: measure the real body and reject before any traffic.
+    const probe = nativeProvider.buildSessionBody({ history, userParts, size: parameters.size });
+    if (Buffer.byteLength(JSON.stringify(probe)) > NATIVE_BODY_LIMIT) {
+      throw new AppError("会话历史体积已超过 Gemini 50MB 请求上限，请新开会话继续", { code: "session_too_large" });
+    }
+    entry = await createGeneration(
+      { taskId: payload?.taskId, parameters },
       sender,
-      { sessionContext: { sessionId: session.id, turnIndex: session.turns.length } },
+      { sessionContext: { sessionId: session.id, turnIndex: session.turns.length }, nativeContents: { history, userParts } },
     );
-  } finally {
-    // ownsFile=false：仅清理注册表与缩略图，results/ 里的基准图原样保留。
-    await removeAsset({ id: asset.id }).catch(() => {});
+    nativeReply = entry.nativeReply || null;
+    delete entry.nativeReply;
+  } else {
+    // chained 会话链：把基准图注册为临时素材并回灌为本轮首张输入，然后复用整条
+    // 编辑管线（单飞锁、批次循环、历史落盘）。会话轮固定非流式（PRD §3 非目标）。
+    const asset = await importAssetFromPath(baseFile);
+    try {
+      entry = await createEdit(
+        { taskId: payload?.taskId, assetIds: [asset.id], parameters },
+        sender,
+        { sessionContext: { sessionId: session.id, turnIndex: session.turns.length } },
+      );
+    } finally {
+      // ownsFile=false：仅清理注册表与缩略图，results/ 里的基准图原样保留。
+      await removeAsset({ id: asset.id }).catch(() => {});
+    }
   }
 
   const turn = {
@@ -1325,6 +1440,11 @@ async function sessionAppendTurn(payload, sender) {
       outputFormat: parameters.outputFormat,
     },
   };
+  // Native turns persist the verbatim model reply for the next replay; chained
+  // turns keep nativeReplyFile null and are skipped by the replay walk.
+  turn.nativeReplyFile = isNativeMode && nativeReply
+    ? await storage.writeSessionNativeReply(session.id, turn.index, nativeReply)
+    : null;
   const updated = await storage.appendSessionTurn(session.id, turn);
   if (!updated) throw new AppError("会话已不存在，本轮结果已保留在画廊", { code: "session_missing" });
   return { entry, session: hydrateSession(updated) };
