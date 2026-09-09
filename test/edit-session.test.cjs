@@ -281,11 +281,16 @@ test("sessionAppendTurn shares the single-flight lock with ordinary edits", asyn
 });
 
 test("cancelling a session turn releases the lock and reports cancelled", async () => {
+  let onBodyReceived;
+  const bodyReceived = new Promise((resolve) => { onBodyReceived = resolve; });
   await withSessionEditHarness(
-    (_req, _res) => {
-      // The request never gets a response (no headers, no body): the client
-      // keeps waiting until it is cancelled. Sending headers would open a
-      // response body stream whose post-abort enqueue races on slow CI machines.
+    (req, _res) => {
+      // Drain the request body and signal when it fully arrived, then keep
+      // the response hanging: the client cancels while waiting for headers.
+      // Cancelling only after the upload reached the server keeps undici's
+      // abort path out of body-stream enqueue races on slow CI machines.
+      req.resume();
+      req.on("end", onBodyReceived);
     },
     async ({ storage, dir, sender }) => {
       const { entry } = await seedEditEntry(storage, dir);
@@ -297,6 +302,12 @@ test("cancelling a session turn releases the lock and reports cancelled", async 
       while (!hooks.getActiveRequestTaskId() || !hooks.hasGenerationController("task-cancel")) {
         await new Promise((resolve) => setImmediate(resolve));
       }
+      // Let the upload finish before aborting so the abort lands in the
+      // "waiting for response" phase, not mid-body-stream.
+      const timeout = setTimeout(() => onBodyReceived(new Error("request body never reached the test server")), 5000);
+      timeout.unref();
+      const failure = await bodyReceived;
+      if (failure) throw failure;
       hooks.cancelTask("task-cancel");
 
       await assert.rejects(() => pending, (error) => error.code === "cancelled");
