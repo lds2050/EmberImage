@@ -3679,7 +3679,6 @@ summary:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 760px;
 }
 
 .session-detail-head {
@@ -3758,6 +3757,7 @@ summary:focus-visible {
 }
 
 .bubble.ai {
+  max-width: 85%;
   background: var(--surface);
   border: 1px solid var(--line);
   border-bottom-left-radius: 5px;
@@ -3865,7 +3865,7 @@ summary:focus-visible {
 
 .session-turn-images {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   gap: 10px;
 }
 
@@ -3891,14 +3891,16 @@ summary:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  max-width: 760px;
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
 }
 
 .session-composer {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: 8px;
+  padding: 12px 14px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 13px;
@@ -3957,15 +3959,18 @@ summary:focus-visible {
 }
 
 .session-turn-error {
+  flex: 1;
+  min-width: 0;
   color: var(--danger);
   font-size: 11px;
 }
 
 .session-base-chip {
-  display: flex;
+  align-self: flex-start;
+  display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 7px 12px;
+  padding: 5px 12px;
   color: var(--muted);
   font-size: 11px;
   background: var(--coral-soft);

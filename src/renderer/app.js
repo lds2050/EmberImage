@@ -2506,14 +2506,21 @@
 
   function renderSessionBaseChip() {
     const chip = $("#session-base-chip");
+    // The chip is only a manual fork indicator — the default (latest turn)
+    // needs no banner, each ai bubble already shows what it was based on.
+    if (!state.sessionBase) {
+      chip.classList.add("hidden");
+      chip.innerHTML = "";
+      return;
+    }
     const base = resolvedSessionBase();
     if (!base) { chip.classList.add("hidden"); chip.innerHTML = ""; return; }
-    const manual = Boolean(state.sessionBase);
     chip.classList.remove("hidden");
-    chip.innerHTML = `<span>下一轮基于：<strong>第 ${base.turnIndex + 1} 轮 · 第 ${base.chosen + 1} 张</strong>${manual ? "" : "（最新一轮）"}</span>${manual ? '<button type="button" class="session-base-reset">重置为最新</button>' : ""}`;
+    chip.innerHTML = `<span>下一轮基于：<strong>第 ${base.turnIndex + 1} 轮 · 第 ${base.chosen + 1} 张</strong></span><button type="button" class="session-base-reset">重置为最新</button>`;
     chip.querySelector(".session-base-reset")?.addEventListener("click", () => {
       state.sessionBase = null;
       renderSessionBaseChip();
+      renderSessionDetail(state.activeSession);
     });
   }
 
@@ -2529,8 +2536,8 @@
     const tags = [];
     if (session.model) tags.push(session.model);
     tags.push(session.mode === "native" ? "原生多轮" : "会话链");
-    if (p.size && p.size !== "auto") tags.push(p.size);
-    if (p.quality && p.quality !== "auto") tags.push(qualityLabels[p.quality] || p.quality);
+    if (p.size) tags.push(p.size === "auto" ? "自适应尺寸" : String(p.size).replace(/x/i, "×"));
+    if (p.quality) tags.push(qualityLabels[p.quality] ? `${qualityLabels[p.quality]}画质` : p.quality);
     if (p.outputFormat) tags.push(String(p.outputFormat).toUpperCase());
     tags.push(`${session.turns.length} 轮`);
     return tags;

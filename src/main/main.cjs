@@ -1221,6 +1221,27 @@ async function createSessionFromResult(payload) {
   return hydrateSession(session);
 }
 
+// Sessions created before the parameters snapshot existed carry turns without
+// parameters; backfill turn 0 from the history entry it points at, once.
+async function getSessionWithParameters(id) {
+  const session = await storage.getSession(String(id));
+  if (!session) return null;
+  const first = session.turns[0];
+  if (!first || first.parameters || !first.entryId) return hydrateSession(session);
+  const history = await storage.listHistory();
+  const entry = history.find((item) => item.id === first.entryId);
+  if (!entry) return hydrateSession(session);
+  const parameters = {
+    size: entry.parameters?.size ?? null,
+    quality: entry.parameters?.quality ?? null,
+    n: entry.images?.length ?? null,
+    outputFormat: entry.parameters?.outputFormat ?? null,
+  };
+  const turns = session.turns.map((turn) => (turn.index === 0 ? { ...turn, parameters } : turn));
+  const updated = await storage.updateSession(session.id, { turns }).catch(() => null);
+  return hydrateSession(updated || session);
+}
+
 async function chooseSessionBase(payload) {
   const id = String(payload?.id || "");
   const turnIndex = Number(payload?.turnIndex);
@@ -1369,10 +1390,7 @@ function registerIpcHandlers() {
   ipcMain.handle("history:clear", withResult(async () => { await storage.clearHistory(); return { cleared: true }; }));
   ipcMain.handle("session:create", withResult((payload) => createSessionFromResult(payload || {})));
   ipcMain.handle("session:list", withResult(async () => (await storage.listSessions()).map(sessionSummary)));
-  ipcMain.handle("session:get", withResult(async (id) => {
-    const session = await storage.getSession(String(id));
-    return session ? hydrateSession(session) : null;
-  }));
+  ipcMain.handle("session:get", withResult((id) => getSessionWithParameters(String(id))));
   ipcMain.handle("session:choose-base", withResult((payload) => chooseSessionBase(payload || {})));
   ipcMain.handle("session:delete", withResult(async (id) => deleteSessionEntry(String(id))));
   ipcMain.handle("session:append-turn", async (event, payload) => {
@@ -1451,6 +1469,7 @@ module.exports = {
     saveMask,
     cancelTask,
     createSessionFromResult,
+    getSessionWithParameters,
     chooseSessionBase,
     deleteSessionEntry,
     sessionAppendTurn,

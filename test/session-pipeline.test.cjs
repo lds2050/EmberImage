@@ -130,6 +130,41 @@ test("createSessionFromResult falls back to chosen 0 and records gemini as nativ
   });
 });
 
+test("getSessionWithParameters backfills turn0 parameters from the referenced history entry", async () => {
+  await withSessionHarness(async ({ storage, dir }) => {
+    const { entry } = await seedEditEntry(storage, dir);
+    // A legacy session created before the parameters snapshot existed.
+    const session = await storage.addSession({
+      title: "旧会话",
+      provider: "openai",
+      model: "gpt-image-2",
+      connectionId: "openai-default",
+      mode: "chained",
+      turns: [{
+        index: 0,
+        entryId: entry.id,
+        prompt: entry.prompt,
+        baseTurn: null,
+        inputSnapshot: null,
+        resultFiles: entry.images.map((image) => image.path),
+        chosen: 0,
+      }],
+    });
+    assert.equal(session.turns[0].parameters, null, "precondition: legacy turn has no parameters");
+
+    const hydrated = await hooks.getSessionWithParameters(session.id);
+    assert.deepEqual(
+      { ...hydrated.turns[0].parameters },
+      { size: "1024x1024", quality: "auto", n: 2, outputFormat: null },
+      "turn0 parameters are backfilled from the history entry",
+    );
+
+    // The backfill is persisted, so the next read sees it without the entry.
+    const reread = await storage.getSession(session.id);
+    assert.ok(reread.turns[0].parameters && reread.turns[0].parameters.size === "1024x1024");
+  });
+});
+
 test("createSessionFromResult rejects unknown entries and entries without images", async () => {
   await withSessionHarness(async ({ storage, dir }) => {
     await assert.rejects(
