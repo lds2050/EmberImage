@@ -29,6 +29,7 @@ Built entirely with vanilla JavaScript (Electron 44, **zero runtime npm dependen
 | 🗂️ **Gallery & history** | Search / favorite / reuse / batch download; edit history keeps independent input copies |
 | 📌 **Prompt library** | Categories / search / pinned favorites / usage stats / batch ops / one-click round-trip |
 | 🌐 **Multi-provider** | Switch **OpenAI-compatible / Seedream (Volcengine Ark) / Gemini** from one interface |
+| 💬 **Multi-turn editing** | Start a session from one image and refine turn by turn: the chain mode works on all three interfaces, while Gemini's native multi-turn keeps the full history in context |
 | 🔐 **Privacy-first** | Keys stay local, optional AES-256-GCM at-rest encryption; API Key never touches logs |
 
 ---
@@ -87,7 +88,8 @@ npm run check
 
 1. Open **Settings → New connection**, pick an **interface type**, fill in the Base URL and API Key;
 2. Go back to **Generate**, type a prompt, and hit generate;
-3. To edit, switch to the **Edit** tab, drop in 1–16 reference images, and describe what to change.
+3. To edit, switch to the **Edit** tab, drop in 1–16 reference images, and describe what to change;
+4. For continuous iteration, open the **Sessions** page: start a session from a result image and refine it turn by turn.
 
 > Tip: click "New OpenAI default" to pre-fill the official endpoint in one click. Switch between multiple saved connections from the sidebar.
 
@@ -102,6 +104,8 @@ Differences between the three interface types (also shown live in the connection
 | **Text-to-image** | ✅ | ✅ | ✅ |
 | **Reference-image edit** | ✅ | ✅ | ✅ |
 | **Mask editing** | ✅ | ❌ | ❌ |
+| **Multi-turn session · chain** | ✅ | ✅ | ✅ |
+| **Multi-turn session · Gemini native** | ❌ | ❌ | ✅ |
 | **Multiple images per request** | ✅ | ✅ | Serial (one by one) |
 | Auth header | `Authorization: Bearer` | `Authorization: Bearer` | `x-goog-api-key` |
 | Default endpoint | `api.openai.com/v1` | `ark.cn-beijing.volces.com/api/v3` | `generativelanguage.googleapis.com/v1beta` |
@@ -129,6 +133,16 @@ Differences between the three interface types (also shown live in the connection
 - JPEGs with orientation metadata (e.g. phone portraits) are auto-rotated so thumbnails match what's sent to the API;
 - Results can be edited further in one click (result becomes the new primary image) or re-run with the original parameters;
 - Non-PNG primaries are losslessly converted to PNG before local-edit submission; your original file is never modified.
+
+### Multi-turn conversational editing
+
+- Dedicated **Sessions** page: start a session from one base image, then give instructions turn by turn and iterate like a chat;
+- **Chain** mode: each turn feeds the previous result back as a reference image — works on all three interfaces;
+- **Gemini native multi-turn**: the full conversation history is replayed to the model (`thoughtSignature` preserved verbatim) for the most coherent context; requires a Gemini connection;
+- Chat-style thread: user/result bubbles on either side, timestamps, a live countdown while generating, one-click retry on failure;
+- Header chips show the model, mode, size, quality, format, and turn count at a glance;
+- **Branching**: any past turn's result can be set as the new base image to explore a different direction;
+- Sessions are stored locally (up to 50 sessions × 20 turns); native-mode model replies are written to disk per turn so the index stays small.
 
 ### Mask editing
 
@@ -203,7 +217,7 @@ EmberImage uses the OS `userData` directory. Deleting a single history entry mov
 
 - Pure CJS + vanilla JS, no build step; tests run on Node's built-in `node --test`;
 - Layout: `src/main` (Electron main process), `src/renderer` (UI), `src/shared` (pure logic + Provider adapters shared by both), `test` (unit + end-to-end pipeline tests);
-- To add a provider: implement the unified `endpoints / headers / buildGenerationBody / buildEditBody / parseResponse` interface in `src/shared/providers/`, then register it in `index.cjs`.
+- To add a provider: implement the unified `endpoints / headers / buildGenerationBody / buildEditBody / parseResponse` interface in `src/shared/providers/` (multi-turn sessions add `buildSessionBody / extractNativeReply`), then register it in `index.cjs`.
 
 ## Docs
 

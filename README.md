@@ -29,6 +29,7 @@
 | 🗂️ **画廊与历史** | 搜索/收藏/复用/批量下载，编辑历史保存独立输入副本 |
 | 📌 **提示词库** | 分类/搜索/收藏置顶/使用次数/批量管理，双向一键转存 |
 | 🌐 **多模型** | 同一界面切换 **OpenAI 兼容 / Seedream（火山方舟）/ Gemini** 三种接口 |
+| 💬 **多轮改图** | 以图起会话逐轮连续修改：会话链模式三种接口通用，Gemini 原生多轮全历史上下文 |
 | 🔐 **隐私优先** | 密钥仅本机、可 AES-256-GCM 加密落盘，API Key 永不写日志 |
 
 ---
@@ -87,7 +88,8 @@ npm run check
 
 1. 打开「设置」→ 新建连接，选择**接口类型**、填写 Base URL 与 API Key；
 2. 回到「生成」页输入提示词，点击生成；
-3. 需要改图时切到「编辑」tab，拖入 1–16 张参考图并描述修改要求。
+3. 需要改图时切到「编辑」tab，拖入 1–16 张参考图并描述修改要求；
+4. 想连续迭代时进「会话」页：以结果图起会话，逐轮下指令微调。
 
 > 首次可点「新建 OpenAI 默认配置」一键填好官方地址。多份连接可在侧边栏快速切换。
 
@@ -102,6 +104,8 @@ npm run check
 | **文字生图** | ✅ | ✅ | ✅ |
 | **参考图编辑** | ✅ | ✅ | ✅ |
 | **Mask 局部编辑** | ✅ | ❌（不支持） | ❌（不支持） |
+| **多轮会话 · 会话链** | ✅ | ✅ | ✅ |
+| **多轮会话 · Gemini 原生** | ❌ | ❌ | ✅ |
 | **多图一次生成** | ✅ | ✅ | 串行逐张 |
 | 认证方式 | `Authorization: Bearer` | `Authorization: Bearer` | `x-goog-api-key` |
 | 默认接口 | `api.openai.com/v1` | `ark.cn-beijing.volces.com/api/v3` | `generativelanguage.googleapis.com/v1beta` |
@@ -129,6 +133,16 @@ npm run check
 - 导入带旋转信息的 JPEG（如手机竖拍）自动摆正，与提交给服务的图一致；
 - 结果可一键「继续编辑」（结果图成为新主图）或按原参数再编辑；
 - 非 PNG 主图在局部编辑提交前自动无损转 PNG，**原文件不被修改**。
+
+### 多轮对话改图
+
+- 独立「会话」页：以一张基准图开启会话，逐轮输入指令连续修改，像聊天一样迭代出图；
+- **会话链**模式：每轮把上一轮结果作为参考图继续编辑，三种接口通用；
+- **Gemini 原生多轮**：把完整对话历史回放给模型（`thoughtSignature` 原样保持），上下文最连贯，需 Gemini 连接；
+- 聊天式对话流：指令与结果左右气泡、时间戳、生成中读秒、失败一键重试；
+- 头部标签实时显示模型、模式、尺寸、画质、格式与轮数；
+- **分叉**：任一历史轮的结果可设为新基准，从该点继续探索不同方向；
+- 会话数据本地存储（最多 50 个会话 × 20 轮），原生模式的模型回复逐轮落盘，不占用索引体积。
 
 ### Mask 局部编辑
 
@@ -203,7 +217,7 @@ EmberImage 使用系统的 `userData` 目录。单条历史「删除」把对应
 
 - 纯 CJS + 原生 JS，无构建步骤；测试用 Node 内置 `node --test`；
 - 目录：`src/main`（Electron 主进程）、`src/renderer`（界面）、`src/shared`（纯逻辑与 Provider 适配器，主/渲染进程共享）、`test`（单测与端到端流水线测试）；
-- 多模型接入点：`src/shared/providers/` 下每个适配器实现统一的 `endpoints/headers/buildGenerationBody/buildEditBody/parseResponse` 接口，注册进 `index.cjs` 即可扩展新接口。
+- 多模型接入点：`src/shared/providers/` 下每个适配器实现统一的 `endpoints/headers/buildGenerationBody/buildEditBody/parseResponse` 接口（多轮会话另含 `buildSessionBody/extractNativeReply`），注册进 `index.cjs` 即可扩展新接口。
 
 ## 文档
 
