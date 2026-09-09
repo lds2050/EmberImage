@@ -59,6 +59,9 @@
     sessionBase: null,
     sessionRunning: false,
     sessionTaskId: null,
+    sessionPendingTimer: null,
+    sessionPendingStartedAt: null,
+    sessionLastPayload: null,
   };
 
   function unwrap(result) {
@@ -2230,6 +2233,7 @@
       server_error: ["服务暂时不可用", "远端服务出现异常，请稍后再试。"],
       timeout: ["请求等待超时", "可在连接设置中提高总超时时间，或在服务支持时尝试流式请求。"],
       cancelled: ["已取消", "这次请求已停止。"],
+      network_error: ["网络连接失败", "请求没能送达服务器。请检查网络后重试；若反复出现，可能是中转站不稳定。"],
       busy: ["已有任务正在进行", "请等待当前生成或编辑完成，或先取消再试。"],
       duplicate_task: ["已有任务正在进行", "请等待当前生成或编辑完成，或先取消再试。"],
       invalid_asset: ["素材不可用", "导入的图片不存在或已被移除，请重新添加。"],
@@ -2519,6 +2523,76 @@
     $("#session-turn-input").focus();
   }
 
+  function sessionTagList(session) {
+    const first = session.turns?.[0];
+    const p = first?.parameters || {};
+    const tags = [];
+    if (session.model) tags.push(session.model);
+    tags.push(session.mode === "native" ? "原生多轮" : "会话链");
+    if (p.size && p.size !== "auto") tags.push(p.size);
+    if (p.quality && p.quality !== "auto") tags.push(qualityLabels[p.quality] || p.quality);
+    if (p.outputFormat) tags.push(String(p.outputFormat).toUpperCase());
+    tags.push(`${session.turns.length} 轮`);
+    return tags;
+  }
+
+  function formatTurnTime(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    const now = new Date();
+    const sameDay = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+    const hm = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
+    if (sameDay) return hm;
+    return `${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${hm}`;
+  }
+
+  function sessionTurnBubbles(turn, base) {
+    const nodes = [];
+    const sentTime = formatTurnTime(turn.createdAt);
+    const doneTime = formatTurnTime(turn.completedAt || turn.createdAt);
+    const userRow = document.createElement("div");
+    userRow.className = "bubble-row user";
+    userRow.innerHTML = `
+      <div class="bubble user">
+        <p class="bubble-text">${escapeHtml(turn.prompt || "（无提示词）")}</p>
+        ${sentTime ? `<span class="bubble-time">${escapeHtml(sentTime)}</span>` : ""}
+      </div>`;
+    nodes.push(userRow);
+    const aiRow = document.createElement("div");
+    aiRow.className = "bubble-row ai";
+    const figures = (turn.resultUrls || []).length
+      ? turn.resultUrls.map((url, fileIndex) => {
+          if (!url) return '<figure class="session-result missing"><span class="session-turn-missing">已删除</span></figure>';
+          const isBase = base && base.turnIndex === turn.index && base.chosen === fileIndex;
+          return `
+            <figure class="session-result${isBase ? " is-base" : ""}">
+              <img src="${escapeHtml(url)}" alt="第 ${turn.index + 1} 轮结果" loading="lazy" />
+              <button type="button" class="session-base-pick" data-turn="${turn.index}" data-file="${fileIndex}">以此为基准</button>
+            </figure>`;
+        }).join("")
+      : '<span class="session-turn-missing">结果图已被删除</span>';
+    const inputNote = turn.inputUrl
+      ? `<div class="session-turn-input"><img src="${escapeHtml(turn.inputUrl)}" alt="本轮输入基准" loading="lazy" /><span>基于${turn.baseTurn === null || turn.baseTurn === undefined ? "原始输入" : `第 ${turn.baseTurn + 1} 轮`}</span></div>`
+      : "";
+    aiRow.innerHTML = `
+      <div class="bubble ai">
+        ${inputNote}
+        <div class="session-turn-images">${figures}</div>
+        <span class="bubble-time">${escapeHtml(doneTime)}${turn.index > 0 ? ` · 第 ${turn.index + 1} 轮` : ""}</span>
+      </div>`;
+    aiRow.querySelectorAll(".session-result img").forEach((node) => {
+      node.addEventListener("dblclick", () => openImageViewer(node.src, turn.prompt, {}));
+    });
+    aiRow.querySelectorAll(".session-base-pick").forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        setSessionBase(Number(button.dataset.turn), Number(button.dataset.file));
+      });
+    });
+    nodes.push(aiRow);
+    return nodes;
+  }
+
   function renderSessionDetail(session) {
     const timeline = $("#session-timeline");
     timeline.innerHTML = "";
@@ -2526,45 +2600,20 @@
     const base = resolvedSessionBase();
     const head = document.createElement("div");
     head.className = "session-detail-head";
+    const tags = sessionTagList(session)
+      .map((tag, i) => `<span class="session-tag${i === 0 ? " primary" : ""}">${escapeHtml(tag)}</span>`)
+      .join("");
     head.innerHTML = `
-      <div>
+      <div class="session-head-row">
         <h3 class="session-title">${escapeHtml(session.title || "未命名会话")}</h3>
-        <p class="session-meta">${escapeHtml(session.model || "")} · ${session.mode === "native" ? "原生多轮" : "会话链"} · ${session.turns.length} 轮 · 更新于 ${escapeHtml(formatDate(session.updatedAt || session.createdAt))}</p>
-      </div>`;
+        <span class="session-updated">更新于 ${escapeHtml(formatTurnTime(session.updatedAt || session.createdAt))}</span>
+      </div>
+      <div class="session-tags">${tags}</div>`;
     timeline.append(head);
-    session.turns.forEach((turn) => {
-      const item = document.createElement("article");
-      item.className = "session-turn";
-      const figures = (turn.resultUrls || []).length
-        ? turn.resultUrls.map((url, fileIndex) => {
-            if (!url) return '<figure class="session-result missing"><span class="session-turn-missing">已删除</span></figure>';
-            const isBase = base && base.turnIndex === turn.index && base.chosen === fileIndex;
-            return `
-              <figure class="session-result${isBase ? " is-base" : ""}">
-                <img src="${escapeHtml(url)}" alt="第 ${turn.index + 1} 轮结果" loading="lazy" />
-                <button type="button" class="session-base-pick" data-turn="${turn.index}" data-file="${fileIndex}">以此为基准</button>
-              </figure>`;
-          }).join("")
-        : '<span class="session-turn-missing">结果图已被删除</span>';
-      const inputNote = turn.inputUrl ? `<div class="session-turn-input"><img src="${escapeHtml(turn.inputUrl)}" alt="本轮输入基准" loading="lazy" /><span>本轮基准</span></div>` : "";
-      item.innerHTML = `
-        <div class="session-turn-marker"><span>${turn.index + 1}</span></div>
-        <div class="session-turn-body">
-          <p class="session-turn-prompt">${escapeHtml(turn.prompt || "（无提示词）")}</p>
-          ${inputNote}
-          <div class="session-turn-images">${figures}</div>
-        </div>`;
-      item.querySelectorAll(".session-result img").forEach((node) => {
-        node.addEventListener("dblclick", () => openImageViewer(node.src, turn.prompt, {}));
-      });
-      item.querySelectorAll(".session-base-pick").forEach((button) => {
-        button.addEventListener("click", (event) => {
-          event.stopPropagation();
-          setSessionBase(Number(button.dataset.turn), Number(button.dataset.file));
-        });
-      });
-      timeline.append(item);
-    });
+    const chat = document.createElement("div");
+    chat.className = "session-chat";
+    session.turns.forEach((turn) => chat.append(...sessionTurnBubbles(turn, base)));
+    timeline.append(chat);
     renderSessionBaseChip();
   }
 
@@ -2576,14 +2625,116 @@
     $("#session-cancel-button").classList.toggle("hidden", !running);
   }
 
+  function appendPendingBubble(prompt) {
+    const chat = $("#session-timeline .session-chat");
+    if (!chat) return;
+    const time = formatTurnTime(new Date().toISOString());
+    const userRow = document.createElement("div");
+    userRow.className = "bubble-row user";
+    userRow.innerHTML = `
+      <div class="bubble user">
+        <p class="bubble-text">${escapeHtml(prompt)}</p>
+        ${time ? `<span class="bubble-time">${escapeHtml(time)}</span>` : ""}
+      </div>`;
+    const aiRow = document.createElement("div");
+    aiRow.className = "bubble-row ai";
+    aiRow.id = "session-pending-row";
+    aiRow.innerHTML = `
+      <div class="bubble ai pending">
+        <div class="pending-line"><span class="pending-dots"><span></span><span></span><span></span></span><span class="pending-text">生成中 · 0s</span></div>
+        ${time ? `<span class="bubble-time">${escapeHtml(time)}</span>` : ""}
+      </div>`;
+    chat.append(userRow, aiRow);
+    aiRow.scrollIntoView({ block: "end", behavior: "smooth" });
+  }
+
+  function startPendingTicker() {
+    stopPendingTicker();
+    state.sessionPendingStartedAt = Date.now();
+    state.sessionPendingTimer = window.setInterval(() => {
+      const node = $("#session-pending-row .pending-text");
+      if (!node) { stopPendingTicker(); return; }
+      const seconds = Math.floor((Date.now() - state.sessionPendingStartedAt) / 1000);
+      node.textContent = `生成中 · ${seconds}s`;
+    }, 1000);
+  }
+
+  function stopPendingTicker() {
+    if (state.sessionPendingTimer) { window.clearInterval(state.sessionPendingTimer); state.sessionPendingTimer = null; }
+    state.sessionPendingStartedAt = null;
+  }
+
+  function removePendingBubble() {
+    stopPendingTicker();
+    $("#session-pending-row")?.remove();
+  }
+
+  function appendErrorBubble(message) {
+    const chat = $("#session-timeline .session-chat");
+    if (!chat) return;
+    const row = document.createElement("div");
+    row.className = "bubble-row ai";
+    row.innerHTML = `
+      <div class="bubble ai error">
+        <p class="bubble-text">${escapeHtml(message)}</p>
+        <div class="bubble-error-actions"><button type="button" class="session-retry">重试</button></div>
+        <span class="bubble-time">${escapeHtml(formatTurnTime(new Date().toISOString()))}</span>
+      </div>`;
+    row.querySelector(".session-retry").addEventListener("click", () => retrySessionTurn());
+    chat.append(row);
+    row.scrollIntoView({ block: "end", behavior: "smooth" });
+  }
+
+  async function dispatchSessionTurn(payload) {
+    const session = state.activeSession;
+    if (!session || state.sessionRunning) return;
+    $("#session-turn-error").textContent = "";
+    state.sessionRunning = true;
+    state.sessionTaskId = payload.taskId;
+    state.sessionLastPayload = payload;
+    updateSessionComposerState();
+    appendPendingBubble(payload.prompt);
+    startPendingTicker();
+    try {
+      const { session: updated } = unwrap(await api.sessionAppendTurn(payload));
+      state.sessionBase = null;
+      state.sessionLastPayload = null;
+      if (state.activeSessionId === updated.id && state.sessionView === "detail") {
+        state.activeSession = updated;
+        $("#session-turn-input").value = "";
+        renderSessionDetail(updated);
+        $("#session-composer").scrollIntoView({ block: "end", behavior: "smooth" });
+      }
+      loadSessions();
+      const lastTurn = updated.turns[updated.turns.length - 1];
+      if (lastTurn) toast(`第 ${lastTurn.index + 1} 轮完成`);
+    }
+    catch (error) {
+      if (error.code !== "cancelled") {
+        const [title, detail] = friendlyError(error);
+        appendErrorBubble(detail ? `${title}：${detail}` : title);
+      }
+    }
+    finally {
+      removePendingBubble();
+      state.sessionRunning = false;
+      state.sessionTaskId = null;
+      updateSessionComposerState();
+    }
+  }
+
+  async function retrySessionTurn() {
+    if (!state.sessionLastPayload || state.sessionRunning) return;
+    await dispatchSessionTurn({ ...state.sessionLastPayload, taskId: crypto.randomUUID() });
+  }
+
   async function sendSessionTurn() {
     const session = state.activeSession;
     if (!session || state.sessionRunning) return;
-    const errorNode = $("#session-turn-error");
-    errorNode.textContent = "";
+    $("#session-turn-error").textContent = "";
     const prompt = $("#session-turn-input").value.trim();
     if (!prompt) {
-      errorNode.textContent = friendlyError({ code: "session_empty_prompt" })[0];
+      $("#session-turn-error").textContent = friendlyError({ code: "session_empty_prompt" })[0];
       $("#session-turn-input").focus();
       return;
     }
@@ -2600,33 +2751,7 @@
       n: Number($("#session-turn-count").value) || 1,
       ...(state.sessionBase ? { baseTurn: state.sessionBase.turnIndex, baseChosen: state.sessionBase.chosen } : {}),
     };
-    state.sessionRunning = true;
-    state.sessionTaskId = payload.taskId;
-    updateSessionComposerState();
-    try {
-      const { session: updated } = unwrap(await api.sessionAppendTurn(payload));
-      state.sessionBase = null;
-      if (state.activeSessionId === updated.id && state.sessionView === "detail") {
-        state.activeSession = updated;
-        $("#session-turn-input").value = "";
-        renderSessionDetail(updated);
-        $("#session-composer").scrollIntoView({ block: "end", behavior: "smooth" });
-      }
-      loadSessions();
-      const lastTurn = updated.turns[updated.turns.length - 1];
-      if (lastTurn) toast(`第 ${lastTurn.index + 1} 轮完成`);
-    }
-    catch (error) {
-      if (error.code !== "cancelled") {
-        const [title, detail] = friendlyError(error);
-        errorNode.textContent = detail ? `${title}：${detail}` : title;
-      }
-    }
-    finally {
-      state.sessionRunning = false;
-      state.sessionTaskId = null;
-      updateSessionComposerState();
-    }
+    await dispatchSessionTurn(payload);
   }
 
   function cancelSessionTurn() {
@@ -2634,9 +2759,11 @@
   }
 
   function backToSessionList() {
+    stopPendingTicker();
     state.activeSessionId = null;
     state.activeSession = null;
     state.sessionBase = null;
+    state.sessionLastPayload = null;
     state.sessionView = "list";
     setSessionView("list");
   }

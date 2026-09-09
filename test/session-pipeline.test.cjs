@@ -115,6 +115,9 @@ test("createSessionFromResult builds the first turn from a history entry", async
     assert.deepEqual(turn.resultFiles, [resultPath, resultPath]);
     assert.equal(turn.inputSnapshot, inputPath);
     assert.ok(turn.resultUrls[1].startsWith("file://"), "hydrated urls for rendering");
+    assert.equal(typeof turn.createdAt, "string", "turn carries a timestamp for the chat bubbles");
+    assert.ok(turn.completedAt === entry.createdAt || typeof turn.completedAt === "string");
+    assert.ok(turn.parameters && typeof turn.parameters === "object", "turn0 snapshots the source entry parameters");
   });
 });
 

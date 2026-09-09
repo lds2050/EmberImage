@@ -173,6 +173,15 @@ function presentError(error) {
     return { code: error.code, message: error.message, status: error.status, requestId: error.requestId, detail: error.detail };
   }
   if (error?.details) return { code: "validation_error", message: error.message, fields: error.details };
+  // Node/undici wraps every network-layer failure in a TypeError("fetch failed");
+  // surface the underlying cause code so the renderer can explain and retry.
+  if (error instanceof TypeError && /fetch failed/i.test(error?.message || "")) {
+    const causeCode = String(error?.cause?.code || error?.cause?.name || "NETWORK").replace(/^UND_ERR_/, "");
+    return {
+      code: "network_error",
+      message: `网络连接失败（${causeCode}）：请求没能送达服务器。请检查网络后重试；若反复出现，可能是中转站不稳定或暂时不可达。`,
+    };
+  }
   return { code: "unexpected_error", message: error?.message || "发生未知错误" };
 }
 
@@ -1199,6 +1208,14 @@ async function createSessionFromResult(payload) {
       inputSnapshot: entry.inputs?.[0]?.storedPath || null,
       resultFiles,
       chosen,
+      createdAt: entry.createdAt || new Date().toISOString(),
+      completedAt: entry.createdAt || null,
+      parameters: {
+        size: entry.parameters?.size ?? null,
+        quality: entry.parameters?.quality ?? null,
+        n: entry.images?.length ?? null,
+        outputFormat: entry.parameters?.outputFormat ?? null,
+      },
     }],
   });
   return hydrateSession(session);
@@ -1278,6 +1295,14 @@ async function sessionAppendTurn(payload, sender) {
     inputSnapshot: baseFile,
     resultFiles: entry.images.map((image) => image.path).filter(Boolean),
     chosen: 0,
+    createdAt: new Date().toISOString(),
+    completedAt: entry.createdAt || null,
+    parameters: {
+      size: parameters.size,
+      quality: parameters.quality,
+      n: parameters.n,
+      outputFormat: parameters.outputFormat,
+    },
   };
   const updated = await storage.appendSessionTurn(session.id, turn);
   if (!updated) throw new AppError("会话已不存在，本轮结果已保留在画廊", { code: "session_missing" });

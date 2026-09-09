@@ -173,6 +173,9 @@ test("sessionAppendTurn feeds the chosen base image back as the first input and 
       assert.equal(turn.baseTurn, 0);
       assert.equal(turn.inputSnapshot, resultPath);
       assert.equal(turn.resultFiles[0], entry.images[0].path);
+      assert.equal(typeof turn.createdAt, "string", "sent timestamp for the user bubble");
+      assert.equal(turn.completedAt, entry.createdAt, "completion timestamp for the ai bubble");
+      assert.ok(turn.parameters && Number(turn.parameters.n) >= 1, "turn snapshots its parameters");
 
       // The persisted history entry carries the back-reference too.
       const history = await storage.listHistory();

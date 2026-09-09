@@ -45,6 +45,14 @@ function normalizeSessionTurn(turn, index) {
   const resultFiles = Array.isArray(item.resultFiles)
     ? item.resultFiles.filter((file) => typeof file === "string" && file).slice(0, 16)
     : [];
+  const parameters = item.parameters && typeof item.parameters === "object" && !Array.isArray(item.parameters)
+    ? {
+      size: typeof item.parameters.size === "string" ? item.parameters.size : null,
+      quality: typeof item.parameters.quality === "string" ? item.parameters.quality : null,
+      n: Number.isInteger(item.parameters.n) ? item.parameters.n : null,
+      outputFormat: typeof item.parameters.outputFormat === "string" ? item.parameters.outputFormat : null,
+    }
+    : null;
   return {
     index: Number.isInteger(item.index) ? item.index : index,
     entryId: typeof item.entryId === "string" && item.entryId ? item.entryId : null,
@@ -53,6 +61,9 @@ function normalizeSessionTurn(turn, index) {
     inputSnapshot: typeof item.inputSnapshot === "string" && item.inputSnapshot ? item.inputSnapshot : null,
     resultFiles,
     chosen: Number.isInteger(item.chosen) && item.chosen >= 0 && item.chosen < resultFiles.length ? item.chosen : 0,
+    createdAt: typeof item.createdAt === "string" && item.createdAt ? item.createdAt : null,
+    completedAt: typeof item.completedAt === "string" && item.completedAt ? item.completedAt : null,
+    parameters,
   };
 }
 
