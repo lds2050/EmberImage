@@ -282,9 +282,10 @@ test("sessionAppendTurn shares the single-flight lock with ordinary edits", asyn
 
 test("cancelling a session turn releases the lock and reports cancelled", async () => {
   await withSessionEditHarness(
-    (_req, res) => {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      // Headers sent, body never finished: the client keeps waiting.
+    (_req, _res) => {
+      // The request never gets a response (no headers, no body): the client
+      // keeps waiting until it is cancelled. Sending headers would open a
+      // response body stream whose post-abort enqueue races on slow CI machines.
     },
     async ({ storage, dir, sender }) => {
       const { entry } = await seedEditEntry(storage, dir);
