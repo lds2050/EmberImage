@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld("imageStudio", {
   getSession: (id) => ipcRenderer.invoke("session:get", id),
   chooseSessionBase: (payload) => ipcRenderer.invoke("session:choose-base", payload),
   deleteSession: (id) => ipcRenderer.invoke("session:delete", id),
+  sessionAppendTurn: (payload) => ipcRenderer.invoke("session:append-turn", payload),
   listPrompts: () => ipcRenderer.invoke("prompts:list"),
   addPrompt: (payload) => ipcRenderer.invoke("prompts:add", payload),
   updatePrompt: (id, changes) => ipcRenderer.invoke("prompts:update", { id, changes }),

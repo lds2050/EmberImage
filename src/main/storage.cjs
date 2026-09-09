@@ -99,6 +99,9 @@ function normalizeHistoryEntry(entry) {
     editMode: "",
     inputs: [],
     mask: null,
+    // Session back-reference (v0.7.0): null for ordinary single-shot edits.
+    sessionId: null,
+    turnIndex: null,
     ...item,
   };
 }
@@ -559,4 +562,4 @@ class AppStorage {
   }
 }
 
-module.exports = { AppStorage, DEFAULT_CONFIG, DEFAULT_PROFILE };
+module.exports = { AppStorage, DEFAULT_CONFIG, DEFAULT_PROFILE, SESSION_TURNS_LIMIT };

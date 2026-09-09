@@ -3779,3 +3779,167 @@ summary:focus-visible {
   color: var(--muted-light);
   font-size: 11px;
 }
+
+/* ---------------------------------------------------------------------------
+   Session continuation composer (v0.7.0 stage B)
+--------------------------------------------------------------------------- */
+
+.session-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 760px;
+}
+
+.session-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  box-shadow: var(--shadow-sm);
+}
+
+.session-composer textarea {
+  width: 100%;
+  padding: 10px 12px;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.6;
+  background: var(--paper-deep);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  resize: vertical;
+}
+
+.session-composer textarea:focus {
+  outline: none;
+  border-color: var(--muted-light);
+}
+
+.session-composer textarea:disabled {
+  opacity: 0.6;
+}
+
+.session-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.session-count-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.session-count-label select {
+  padding: 3px 6px;
+  color: var(--ink);
+  font-size: 11px;
+  background: var(--paper-deep);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.session-composer-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.session-turn-error {
+  color: var(--danger);
+  font-size: 11px;
+}
+
+.session-base-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  background: var(--coral-soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.session-base-chip strong {
+  color: var(--coral-dark);
+  font-weight: 600;
+}
+
+.session-base-reset {
+  padding: 2px 8px;
+  color: var(--muted);
+  font-size: 10px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.session-base-reset:hover {
+  color: var(--ink);
+  border-color: var(--muted-light);
+}
+
+.session-result {
+  position: relative;
+  margin: 0;
+  overflow: hidden;
+  border-radius: 9px;
+}
+
+.session-result.missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  background: var(--paper-deep);
+  border: 1px dashed var(--line);
+}
+
+.session-result.is-base img {
+  border-color: var(--coral-dark);
+}
+
+.session-result.is-base::after {
+  content: "基准";
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 2px 7px;
+  color: #fff;
+  font-size: 10px;
+  background: var(--coral-dark);
+  border-radius: 999px;
+}
+
+.session-base-pick {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  padding: 4px 10px;
+  color: var(--ink);
+  font-size: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  opacity: 0;
+  transform: translateX(-50%);
+  transition: opacity 0.15s ease;
+}
+
+.session-result:hover .session-base-pick,
+.session-base-pick:focus-visible {
+  opacity: 1;
+}

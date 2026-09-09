@@ -386,7 +386,28 @@
             </div>
           </div>
           <div class="prompts-grid" id="sessions-list"></div>
-          <div class="session-timeline hidden" id="session-detail"></div>
+          <div class="session-detail hidden" id="session-detail">
+            <div class="session-timeline" id="session-timeline"></div>
+            <div class="session-composer" id="session-composer">
+              <div class="session-base-chip hidden" id="session-base-chip"></div>
+              <textarea id="session-turn-input" rows="2" placeholder="输入下一步调整指令，例如「把背景换成黄昏的海边」…" maxlength="32000"></textarea>
+              <div class="session-composer-actions">
+                <label class="session-count-label" for="session-turn-count">张数
+                  <select id="session-turn-count">
+                    <option value="1" selected>1</option>
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                  </select>
+                </label>
+                <span class="session-turn-error" id="session-turn-error" role="alert"></span>
+                <div class="session-composer-buttons">
+                  <button class="ghost-button hidden" id="session-cancel-button" type="button">取消</button>
+                  <button class="primary-button" id="session-send-button" type="button">发送</button>
+                </div>
+              </div>
+            </div>
+          </div>
           <div class="history-empty hidden" id="sessions-empty">
             <div>◇</div>
             <h3>还没有改图会话</h3>

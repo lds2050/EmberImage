@@ -7,7 +7,7 @@ const fsSync = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
-const { AppStorage, DEFAULT_PROFILE } = require("./storage.cjs");
+const { AppStorage, DEFAULT_PROFILE, SESSION_TURNS_LIMIT } = require("./storage.cjs");
 const { decryptSecret, decryptSecretForDevice, encryptSecretForDevice, maskSecret } = require("./secure-store.cjs");
 const Validation = require("../shared/validation.js");
 const Providers = require("../shared/providers/index.cjs");
@@ -827,7 +827,9 @@ function editRequestDetails(profile, endpoint, metadata, inputs, mask) {
   };
 }
 
-async function createEdit(request, sender) {
+// `options.sessionContext` (v0.7.0) is only passed by session continuations; the
+// ordinary edit path never sets it, so the single-shot behavior is unchanged.
+async function createEdit(request, sender, options = {}) {
   const taskId = safeTaskId(request.taskId);
   if (activeRequestTaskId) throw new AppError("已有图片任务正在进行，请等待完成或取消", { code: "busy" });
   if (generationControllers.has(taskId)) throw new AppError("该任务已在生成中", { code: "duplicate_task" });
@@ -1024,6 +1026,8 @@ async function createEdit(request, sender) {
         connectionName: profile.name,
         providerHost: new URL(baseUrl).host,
         favorite: false,
+        sessionId: options.sessionContext?.sessionId || null,
+        turnIndex: Number.isInteger(options.sessionContext?.turnIndex) ? options.sessionContext.turnIndex : null,
         inputs,
         mask: maskRecord,
         parameters: {
@@ -1134,7 +1138,9 @@ function hydrateSession(session) {
     ...session,
     turns: (session.turns || []).map((turn) => ({
       ...turn,
-      resultUrls: (turn.resultFiles || []).map((file) => sessionPreviewUrl(file)).filter(Boolean),
+      // resultUrls keeps nulls at the original file index so the renderer can
+      // address resultFiles[chosen] correctly even after files went missing.
+      resultUrls: (turn.resultFiles || []).map((file) => sessionPreviewUrl(file)),
       inputUrl: sessionPreviewUrl(turn.inputSnapshot),
     })),
   };
@@ -1214,6 +1220,70 @@ async function chooseSessionBase(payload) {
   return updated ? hydrateSession(updated) : null;
 }
 
+async function sessionAppendTurn(payload, sender) {
+  const id = String(payload?.id || "");
+  const prompt = typeof payload?.prompt === "string" ? payload.prompt.trim() : "";
+  if (!prompt) throw new AppError("请输入本轮调整指令", { code: "session_empty_prompt" });
+  const session = await storage.getSession(id);
+  if (!session) throw new AppError("会话不存在", { code: "session_missing" });
+  // Fail before any API traffic so a full session never burns credits.
+  if (session.turns.length >= SESSION_TURNS_LIMIT) {
+    throw new AppError(`单会话最多 ${SESSION_TURNS_LIMIT} 轮，请基于当前结果新开会话`, { code: "session_turn_limit_reached" });
+  }
+  const fallbackBase = session.turns[session.turns.length - 1];
+  const baseTurnIndex = Number.isInteger(payload?.baseTurn) ? payload.baseTurn : fallbackBase?.index;
+  const baseTurn = session.turns.find((turn) => turn.index === baseTurnIndex);
+  if (!baseTurn) throw new AppError("基准轮次不存在", { code: "session_base_invalid" });
+  const chosen = Number.isInteger(payload?.baseChosen) && payload.baseChosen >= 0 && payload.baseChosen < baseTurn.resultFiles.length
+    ? payload.baseChosen
+    : (baseTurn.chosen || 0);
+  const baseFile = baseTurn.resultFiles[chosen] || null;
+  if (!baseFile) throw new AppError("基准图已被删除，无法继续本会话", { code: "session_base_missing" });
+  await fs.access(baseFile).catch(() => {
+    throw new AppError("基准图文件已丢失（可能随历史记录一起删除了）", { code: "session_base_missing" });
+  });
+
+  // chained 会话链：把基准图注册为临时素材并回灌为本轮首张输入，然后复用整条
+  // 编辑管线（单飞锁、批次循环、历史落盘）。会话轮固定非流式（PRD §3 非目标）。
+  const asset = await importAssetFromPath(baseFile);
+  const parameters = {
+    prompt,
+    size: typeof payload?.size === "string" ? payload.size : "auto",
+    quality: typeof payload?.quality === "string" ? payload.quality : "auto",
+    n: Math.max(1, Math.min(Number(payload?.n) || 1, 4)),
+    background: typeof payload?.background === "string" ? payload.background : "auto",
+    outputFormat: typeof payload?.outputFormat === "string" ? payload.outputFormat : "png",
+    outputCompression: null,
+    moderation: typeof payload?.moderation === "string" ? payload.moderation : "auto",
+    stream: false,
+    partialImages: 0,
+  };
+  let entry;
+  try {
+    entry = await createEdit(
+      { taskId: payload?.taskId, assetIds: [asset.id], parameters },
+      sender,
+      { sessionContext: { sessionId: session.id, turnIndex: session.turns.length } },
+    );
+  } finally {
+    // ownsFile=false：仅清理注册表与缩略图，results/ 里的基准图原样保留。
+    await removeAsset({ id: asset.id }).catch(() => {});
+  }
+
+  const turn = {
+    index: session.turns.length,
+    entryId: entry.id,
+    prompt,
+    baseTurn: baseTurnIndex,
+    inputSnapshot: baseFile,
+    resultFiles: entry.images.map((image) => image.path).filter(Boolean),
+    chosen: 0,
+  };
+  const updated = await storage.appendSessionTurn(session.id, turn);
+  if (!updated) throw new AppError("会话已不存在，本轮结果已保留在画廊", { code: "session_missing" });
+  return { entry, session: hydrateSession(updated) };
+}
+
 async function deleteSessionEntry(id) {
   const removed = await storage.removeSession(String(id));
   if (!removed) return { deleted: false };
@@ -1280,6 +1350,10 @@ function registerIpcHandlers() {
   }));
   ipcMain.handle("session:choose-base", withResult((payload) => chooseSessionBase(payload || {})));
   ipcMain.handle("session:delete", withResult(async (id) => deleteSessionEntry(String(id))));
+  ipcMain.handle("session:append-turn", async (event, payload) => {
+    try { return { ok: true, data: await sessionAppendTurn(payload || {}, event.sender) }; }
+    catch (error) { return { ok: false, error: presentError(error) }; }
+  });
   ipcMain.handle("prompts:list", withResult(async () => storage.listPrompts()));
   ipcMain.handle("prompts:add", withResult(async (payload) => storage.addPrompt({
     text: typeof payload?.text === "string" ? payload.text : "",
@@ -1354,9 +1428,11 @@ module.exports = {
     createSessionFromResult,
     chooseSessionBase,
     deleteSessionEntry,
+    sessionAppendTurn,
     setStorage: (value) => { storage = value; },
     setTimeoutOverrideMs: (value) => { testTimeoutOverrideMs = value; },
     getActiveRequestTaskId: () => activeRequestTaskId,
+    hasGenerationController: (taskId) => generationControllers.has(String(taskId)),
     sessionApiKeys,
     assetRegistry,
   },

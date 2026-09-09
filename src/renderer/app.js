@@ -56,6 +56,9 @@
     sessionView: "list",
     activeSessionId: null,
     activeSession: null,
+    sessionBase: null,
+    sessionRunning: false,
+    sessionTaskId: null,
   };
 
   function unwrap(result) {
@@ -2248,6 +2251,8 @@
       session_missing: ["会话不存在", "该会话可能已被删除。"],
       session_turn_missing: ["轮次不存在", "请刷新后重试。"],
       session_base_invalid: ["基准图无效", "所选编号超出该轮结果范围。"],
+      session_base_missing: ["基准图已丢失", "基准图可能随历史记录一起删除了，请换一张图作为基准。"],
+      session_empty_prompt: ["请输入调整指令", "描述这一轮想怎么改，再发送。"],
     };
     const fallbackTitle = state.lastOperation === "edit" ? "编辑没有完成" : "生成没有完成";
     return messages[error.code] || [fallbackTitle, error.message || "请稍后重试。"];
@@ -2464,6 +2469,10 @@
   }
 
   async function openSession(id) {
+    if (state.sessionRunning) {
+      toast("本轮还在生成中，稍候再切换会话", "error");
+      return;
+    }
     try {
       const session = unwrap(await api.getSession(id));
       if (!session) throw new Error("会话不存在");
@@ -2476,9 +2485,45 @@
     catch (error) { toast(error.message, "error"); }
   }
 
+  function resolvedSessionBase() {
+    const session = state.activeSession;
+    if (!session?.turns?.length) return null;
+    if (state.sessionBase) {
+      const picked = session.turns.find((turn) => turn.index === state.sessionBase.turnIndex);
+      if (picked && state.sessionBase.chosen >= 0 && state.sessionBase.chosen < (picked.resultUrls || []).length && picked.resultUrls[state.sessionBase.chosen]) {
+        return { turnIndex: picked.index, chosen: state.sessionBase.chosen };
+      }
+      state.sessionBase = null; // The picked image is gone — fall back to the latest turn.
+    }
+    const last = session.turns[session.turns.length - 1];
+    const chosen = Math.min(last.chosen || 0, Math.max(0, (last.resultUrls || []).length - 1));
+    return { turnIndex: last.index, chosen };
+  }
+
+  function renderSessionBaseChip() {
+    const chip = $("#session-base-chip");
+    const base = resolvedSessionBase();
+    if (!base) { chip.classList.add("hidden"); chip.innerHTML = ""; return; }
+    const manual = Boolean(state.sessionBase);
+    chip.classList.remove("hidden");
+    chip.innerHTML = `<span>下一轮基于：<strong>第 ${base.turnIndex + 1} 轮 · 第 ${base.chosen + 1} 张</strong>${manual ? "" : "（最新一轮）"}</span>${manual ? '<button type="button" class="session-base-reset">重置为最新</button>' : ""}`;
+    chip.querySelector(".session-base-reset")?.addEventListener("click", () => {
+      state.sessionBase = null;
+      renderSessionBaseChip();
+    });
+  }
+
+  function setSessionBase(turnIndex, chosen) {
+    state.sessionBase = { turnIndex, chosen };
+    renderSessionDetail(state.activeSession);
+    $("#session-turn-input").focus();
+  }
+
   function renderSessionDetail(session) {
-    const detail = $("#session-detail");
-    detail.innerHTML = "";
+    const timeline = $("#session-timeline");
+    timeline.innerHTML = "";
+    if (!session) { renderSessionBaseChip(); return; }
+    const base = resolvedSessionBase();
     const head = document.createElement("div");
     head.className = "session-detail-head";
     head.innerHTML = `
@@ -2486,29 +2531,112 @@
         <h3 class="session-title">${escapeHtml(session.title || "未命名会话")}</h3>
         <p class="session-meta">${escapeHtml(session.model || "")} · ${session.mode === "native" ? "原生多轮" : "会话链"} · ${session.turns.length} 轮 · 更新于 ${escapeHtml(formatDate(session.updatedAt || session.createdAt))}</p>
       </div>`;
-    detail.append(head);
+    timeline.append(head);
     session.turns.forEach((turn) => {
       const item = document.createElement("article");
       item.className = "session-turn";
-      const images = turn.resultUrls.map((url) => `<img src="${escapeHtml(url)}" alt="第 ${turn.index + 1} 轮结果" loading="lazy" />`).join("");
+      const figures = (turn.resultUrls || []).length
+        ? turn.resultUrls.map((url, fileIndex) => {
+            if (!url) return '<figure class="session-result missing"><span class="session-turn-missing">已删除</span></figure>';
+            const isBase = base && base.turnIndex === turn.index && base.chosen === fileIndex;
+            return `
+              <figure class="session-result${isBase ? " is-base" : ""}">
+                <img src="${escapeHtml(url)}" alt="第 ${turn.index + 1} 轮结果" loading="lazy" />
+                <button type="button" class="session-base-pick" data-turn="${turn.index}" data-file="${fileIndex}">以此为基准</button>
+              </figure>`;
+          }).join("")
+        : '<span class="session-turn-missing">结果图已被删除</span>';
       const inputNote = turn.inputUrl ? `<div class="session-turn-input"><img src="${escapeHtml(turn.inputUrl)}" alt="本轮输入基准" loading="lazy" /><span>本轮基准</span></div>` : "";
       item.innerHTML = `
         <div class="session-turn-marker"><span>${turn.index + 1}</span></div>
         <div class="session-turn-body">
           <p class="session-turn-prompt">${escapeHtml(turn.prompt || "（无提示词）")}</p>
           ${inputNote}
-          <div class="session-turn-images">${images || '<span class="session-turn-missing">结果图已被删除</span>'}</div>
+          <div class="session-turn-images">${figures}</div>
         </div>`;
-      item.querySelectorAll(".session-turn-images img").forEach((node, index) => {
-        node.addEventListener("dblclick", () => openImageViewer(turn.resultUrls[index], turn.prompt, {}));
+      item.querySelectorAll(".session-result img").forEach((node) => {
+        node.addEventListener("dblclick", () => openImageViewer(node.src, turn.prompt, {}));
       });
-      detail.append(item);
+      item.querySelectorAll(".session-base-pick").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          setSessionBase(Number(button.dataset.turn), Number(button.dataset.file));
+        });
+      });
+      timeline.append(item);
     });
+    renderSessionBaseChip();
+  }
+
+  function updateSessionComposerState() {
+    const running = state.sessionRunning;
+    $("#session-turn-input").disabled = running;
+    $("#session-turn-count").disabled = running;
+    $("#session-send-button").classList.toggle("hidden", running);
+    $("#session-cancel-button").classList.toggle("hidden", !running);
+  }
+
+  async function sendSessionTurn() {
+    const session = state.activeSession;
+    if (!session || state.sessionRunning) return;
+    const errorNode = $("#session-turn-error");
+    errorNode.textContent = "";
+    const prompt = $("#session-turn-input").value.trim();
+    if (!prompt) {
+      errorNode.textContent = friendlyError({ code: "session_empty_prompt" })[0];
+      $("#session-turn-input").focus();
+      return;
+    }
+    const profile = activeProfile();
+    if (!profile?.isUnlocked) {
+      navigate("settings");
+      toast("请先为当前连接输入 API Key，或完成旧版密钥迁移", "error");
+      return;
+    }
+    const payload = {
+      id: session.id,
+      prompt,
+      taskId: crypto.randomUUID(),
+      n: Number($("#session-turn-count").value) || 1,
+      ...(state.sessionBase ? { baseTurn: state.sessionBase.turnIndex, baseChosen: state.sessionBase.chosen } : {}),
+    };
+    state.sessionRunning = true;
+    state.sessionTaskId = payload.taskId;
+    updateSessionComposerState();
+    try {
+      const { session: updated } = unwrap(await api.sessionAppendTurn(payload));
+      state.sessionBase = null;
+      if (state.activeSessionId === updated.id && state.sessionView === "detail") {
+        state.activeSession = updated;
+        $("#session-turn-input").value = "";
+        renderSessionDetail(updated);
+        $("#session-composer").scrollIntoView({ block: "end", behavior: "smooth" });
+      }
+      loadSessions();
+      const lastTurn = updated.turns[updated.turns.length - 1];
+      if (lastTurn) toast(`第 ${lastTurn.index + 1} 轮完成`);
+    }
+    catch (error) {
+      if (error.code !== "cancelled") {
+        const [title, detail] = friendlyError(error);
+        errorNode.textContent = detail ? `${title}：${detail}` : title;
+      }
+    }
+    finally {
+      state.sessionRunning = false;
+      state.sessionTaskId = null;
+      updateSessionComposerState();
+    }
+  }
+
+  function cancelSessionTurn() {
+    if (state.sessionTaskId) api.cancelEdit(state.sessionTaskId);
   }
 
   function backToSessionList() {
     state.activeSessionId = null;
     state.activeSession = null;
+    state.sessionBase = null;
     state.sessionView = "list";
     setSessionView("list");
   }
@@ -2926,6 +3054,14 @@
 
   $$("[data-view-target]").forEach((button) => button.addEventListener("click", () => navigate(button.dataset.viewTarget)));
   $("#back-to-session-list-button").addEventListener("click", backToSessionList);
+  $("#session-send-button").addEventListener("click", sendSessionTurn);
+  $("#session-cancel-button").addEventListener("click", cancelSessionTurn);
+  $("#session-turn-input").addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      sendSessionTurn();
+    }
+  });
   $("#open-settings-button").addEventListener("click", () => navigate("settings"));
   $("#prompt-input").addEventListener("input", updateGenerationState);
   $("#clear-prompt").addEventListener("click", () => { $("#prompt-input").value = ""; updateGenerationState(); $("#prompt-input").focus(); });
