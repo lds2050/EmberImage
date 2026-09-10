@@ -230,12 +230,26 @@
     if (!model.value.trim() || modelDefaults.includes(model.value.trim())) model.value = meta.defaultModel;
   }
 
+  // Fills the model datalist with the active provider's preset names; the input
+  // itself stays free-form so custom model ids keep working everywhere.
+  function renderModelPresets(meta) {
+    const datalist = $("#model-presets");
+    if (!datalist) return;
+    datalist.textContent = "";
+    (meta?.modelPresets || []).forEach((preset) => {
+      const option = document.createElement("option");
+      option.value = preset;
+      datalist.append(option);
+    });
+  }
+
   function setProviderChoice(value, options = {}) {
     const provider = providerMetaFor(value) ? value : "openai";
     $$("#provider-options .provider-option").forEach((button) => button.classList.toggle("active", button.dataset.value === provider));
     const meta = providerMetaFor(provider);
     if (!meta) return;
     if (options.applyDefaults) applyProviderDefaults(meta);
+    renderModelPresets(meta);
     $("#provider-hint").textContent = meta.hint;
     updateProviderCapabilityDisplay(meta);
   }
@@ -289,7 +303,7 @@
       name: options.official ? "OpenAI" : "新连接",
       provider: "openai",
       baseUrl: options.official ? "https://api.openai.com/v1" : "",
-      model: "gpt-image-2",
+      model: "gpt-image-2.5-flare",
       keyStorage: "session",
       requestTimeoutSeconds: 180,
       streamEnabled: false,
@@ -312,7 +326,7 @@
     setProviderChoice(draft.provider);
     $("#connection-name-input").value = draft.name || "";
     $("#base-url-input").value = draft.baseUrl || "";
-    $("#model-input").value = draft.model || "gpt-image-2";
+    $("#model-input").value = draft.model || "gpt-image-2.5-flare";
     $("#api-key-input").value = "";
     $("#request-timeout-input").value = draft.requestTimeoutSeconds || 180;
     $("#unlock-password-input").value = "";

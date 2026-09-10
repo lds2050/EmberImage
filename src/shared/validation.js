@@ -9,7 +9,7 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function createValidation() {
   "use strict";
 
-  const QUALITY_VALUES = new Set(["auto", "low", "medium", "high"]);
+  const QUALITY_VALUES = new Set(["auto", "low", "medium", "high", "xhigh", "max"]);
   const FORMAT_VALUES = new Set(["png", "jpeg", "webp"]);
   const BACKGROUND_VALUES = new Set(["auto", "opaque", "transparent"]);
   const MODERATION_VALUES = new Set(["auto", "low"]);
@@ -95,7 +95,7 @@
       return { error: "总像素不能低于 655,360" };
     }
     if (width > MAX_EDGE || height > MAX_EDGE || width * height > MAX_PIXELS) {
-      return { error: "尺寸超过 GPT Image 2 当前最大分辨率范围" };
+      return { error: "尺寸超过 GPT Image 系列当前最大分辨率范围" };
     }
     return {
       width,

@@ -995,6 +995,11 @@ summary:focus-visible {
   gap: 6px;
 }
 
+/* 生成质量 6 档（auto/low/medium/high + 2.5 系列 xhigh/max）单行排布 */
+#quality-control {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
 .option-card-control button {
   display: flex;
   min-width: 0;

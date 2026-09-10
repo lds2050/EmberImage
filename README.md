@@ -109,7 +109,7 @@ npm run check
 | **多图一次生成** | ✅ | ✅ | 串行逐张 |
 | 认证方式 | `Authorization: Bearer` | `Authorization: Bearer` | `x-goog-api-key` |
 | 默认接口 | `api.openai.com/v1` | `ark.cn-beijing.volces.com/api/v3` | `generativelanguage.googleapis.com/v1beta` |
-| 默认模型 | `gpt-image-2` | `doubao-seedream-4-0-250828` | `gemini-3-pro-image-preview` |
+| 默认模型 | `gpt-image-2.5-flare` | `doubao-seedream-4-0-250828` | `gemini-3-pro-image-preview` |
 
 > 更早的中转 / 其他 OpenAI 兼容服务可直接选用「OpenAI 兼容」。未实现 `/images/edits` 的服务会被自动标记为「不支持图片编辑」，文字生图不受影响。
 
@@ -189,6 +189,8 @@ npm run check
 ### 连接与兼容
 
 - 多份独立连接，分别保存名称、Base URL、模型、密钥策略、超时与流式开关；
+- 模型名称按接口类型提供预设下拉（OpenAI 兼容含 `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` / `gpt-image-2`），始终支持自由输入；
+- 生成质量支持 `auto / low / medium / high / xhigh / max` 六档，其中超高与极致为 GPT Image 2.5 系列新增；
 - 按实际请求结果标记生成/编辑支持情况（404/405 标记不支持，仅作提示）。
 
 ---

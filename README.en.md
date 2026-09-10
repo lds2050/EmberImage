@@ -109,7 +109,7 @@ Differences between the three interface types (also shown live in the connection
 | **Multiple images per request** | ✅ | ✅ | Serial (one by one) |
 | Auth header | `Authorization: Bearer` | `Authorization: Bearer` | `x-goog-api-key` |
 | Default endpoint | `api.openai.com/v1` | `ark.cn-beijing.volces.com/api/v3` | `generativelanguage.googleapis.com/v1beta` |
-| Default model | `gpt-image-2` | `doubao-seedream-4-0-250828` | `gemini-3-pro-image-preview` |
+| Default model | `gpt-image-2.5-flare` | `doubao-seedream-4-0-250828` | `gemini-3-pro-image-preview` |
 
 > Any relay or other OpenAI-compatible service can use the "OpenAI-compatible" type. Services that omit `/images/edits` are automatically flagged "editing not supported"; text-to-image keeps working.
 
@@ -189,6 +189,8 @@ Reach precise boundaries with selections instead of freehand, then turn a select
 ### Connections & compatibility
 
 - Multiple independent connections, each storing name, Base URL, model, key strategy, timeout, and streaming toggle;
+- Model names come with per-provider preset suggestions (OpenAI-compatible: `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` / `gpt-image-2`) while staying free-form;
+- Quality supports `auto / low / medium / high / xhigh / max` — xhigh and max are new with the GPT Image 2.5 series;
 - Generation/edit support is flagged from real request results (404/405 mark "unsupported" as a hint only).
 
 ---

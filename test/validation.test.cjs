@@ -92,3 +92,13 @@ test("validates quantity and prompt limits", () => {
   assert.equal(V.validateGeneration(validInput({ prompt: "" })).valid, false);
   assert.equal(V.validateGeneration(validInput({ prompt: "x".repeat(32001) })).valid, false);
 });
+
+test("accepts GPT Image 2.5 quality tiers and rejects unknown ones", () => {
+  for (const quality of ["xhigh", "max"]) {
+    const payload = V.buildGenerationPayload(validInput({ quality }));
+    assert.equal(payload.quality, quality);
+  }
+  const rejected = V.validateGeneration(validInput({ quality: "ultra" }));
+  assert.equal(rejected.valid, false);
+  assert.match(rejected.errors.quality, /质量/);
+});

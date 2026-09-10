@@ -184,13 +184,15 @@
                   <div class="parameter-group">
                     <div class="parameter-title-row">
                       <label>生成质量</label>
-                      <span class="parameter-hint">不改变图片尺寸</span>
+                      <span class="parameter-hint">不改变图片尺寸 · 超高/极致仅 2.5 系列</span>
                     </div>
                     <div class="option-card-control" id="quality-control">
                       <button type="button" data-value="auto" class="active"><strong>自动</strong><small>模型决定</small></button>
                       <button type="button" data-value="low"><strong>低</strong><small>快速草稿</small></button>
                       <button type="button" data-value="medium"><strong>中</strong><small>质量均衡</small></button>
                       <button type="button" data-value="high"><strong>高</strong><small>细节优先</small></button>
+                      <button type="button" data-value="xhigh"><strong>超高</strong><small>细节增强</small></button>
+                      <button type="button" data-value="max"><strong>极致</strong><small>当前最高</small></button>
                     </div>
                   </div>
                 </div>
@@ -454,7 +456,8 @@
                   </div>
                   <div class="form-field">
                     <label for="model-input">模型名称</label>
-                    <input id="model-input" type="text" value="gpt-image-2" spellcheck="false" />
+                    <input id="model-input" type="text" list="model-presets" value="gpt-image-2.5-flare" spellcheck="false" placeholder="支持预设选择或自由输入" />
+                    <datalist id="model-presets"></datalist>
                     <p class="field-error" id="model-error"></p>
                   </div>
                   <div class="form-field full">

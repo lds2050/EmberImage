@@ -199,10 +199,15 @@ test("provider metadata covers every registered id with defaults and hints", () 
     assert.match(item.defaultBaseUrl, /^https:\/\//);
     assert.ok(item.defaultModel, `${item.id} needs a default model`);
     assert.ok(item.hint, `${item.id} needs a hint`);
+    assert.ok(Array.isArray(item.modelPresets) && item.modelPresets.length > 0, `${item.id} needs model presets`);
+    assert.ok(item.modelPresets.includes(item.defaultModel), `${item.id} presets must include its default model`);
     assert.equal(typeof item.capabilities.maskEdit, "boolean");
   }
   assert.equal(meta.find((item) => item.id === "seedream").defaultBaseUrl, "https://ark.cn-beijing.volces.com/api/v3");
   assert.equal(meta.find((item) => item.id === "gemini").defaultModel, "gemini-3-pro-image-preview");
+  const openaiMeta = meta.find((item) => item.id === "openai");
+  assert.equal(openaiMeta.defaultModel, "gpt-image-2.5-flare");
+  assert.deepEqual(openaiMeta.modelPresets, ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2"]);
 });
 
 test("capabilitiesOf reflects the active provider", () => {

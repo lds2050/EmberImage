@@ -9,7 +9,7 @@ const DEFAULT_PROFILE = {
   name: "OpenAI",
   provider: "openai",
   baseUrl: "https://api.openai.com/v1",
-  model: "gpt-image-2",
+  model: "gpt-image-2.5-flare",
   keyStorage: "session",
   encryptedKey: null,
   requestTimeoutSeconds: 180,
