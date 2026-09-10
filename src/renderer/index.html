@@ -456,8 +456,11 @@
                   </div>
                   <div class="form-field">
                     <label for="model-input">模型名称</label>
-                    <input id="model-input" type="text" list="model-presets" value="gpt-image-2.5-flare" spellcheck="false" placeholder="支持预设选择或自由输入" />
-                    <datalist id="model-presets"></datalist>
+                    <div class="model-select" id="model-select">
+                      <input id="model-input" type="text" value="gpt-image-2.5-flare" spellcheck="false" autocomplete="off" placeholder="支持预设选择或自由输入" />
+                      <button type="button" class="model-select-toggle" id="model-select-toggle" aria-label="展开模型预设列表" aria-expanded="false">&#9662;</button>
+                      <div class="model-select-menu" id="model-select-menu" hidden></div>
+                    </div>
                     <p class="field-error" id="model-error"></p>
                   </div>
                   <div class="form-field full">

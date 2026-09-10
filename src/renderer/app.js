@@ -230,17 +230,113 @@
     if (!model.value.trim() || modelDefaults.includes(model.value.trim())) model.value = meta.defaultModel;
   }
 
-  // Fills the model datalist with the active provider's preset names; the input
-  // itself stays free-form so custom model ids keep working everywhere.
-  function renderModelPresets(meta) {
-    const datalist = $("#model-presets");
-    if (!datalist) return;
-    datalist.textContent = "";
-    (meta?.modelPresets || []).forEach((preset) => {
-      const option = document.createElement("option");
-      option.value = preset;
-      datalist.append(option);
+  // 自绘模型预设下拉（替代原生 datalist：系统弹层字体不受控、Chromium 会按
+  // 当前值过滤导致选中后再展开只剩一条）。点击展开永远展示全部预设，仅键入
+  // 时按包含关系模糊过滤；输入框本身保持自由输入，自定义模型名不受影响。
+  function modelSelectElements() {
+    return {
+      wrap: $("#model-select"),
+      input: $("#model-input"),
+      toggle: $("#model-select-toggle"),
+      menu: $("#model-select-menu"),
+    };
+  }
+
+  function closeModelMenu() {
+    const { toggle, menu } = modelSelectElements();
+    menu.hidden = true;
+    toggle.setAttribute("aria-expanded", "false");
+    state.modelPresetIndex = -1;
+  }
+
+  function renderModelMenu(filterText) {
+    const { menu } = modelSelectElements();
+    const query = (filterText || "").trim().toLowerCase();
+    const list = query
+      ? (state.modelPresetList || []).filter((preset) => preset.toLowerCase().includes(query))
+      : state.modelPresetList || [];
+    menu.textContent = "";
+    if (!list.length) {
+      const empty = document.createElement("div");
+      empty.className = "model-select-empty";
+      empty.textContent = "无匹配预设，可直接输入自定义模型名";
+      menu.append(empty);
+    }
+    list.forEach((preset) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "model-select-option";
+      item.textContent = preset;
+      item.addEventListener("pointerdown", (event) => {
+        event.preventDefault(); // 保住输入框焦点，避免先失焦关菜单
+        const input = $("#model-input");
+        input.value = preset;
+        closeModelMenu();
+        input.focus();
+      });
+      menu.append(item);
     });
+    state.modelPresetIndex = -1;
+  }
+
+  function openModelMenu() {
+    const { input, toggle, menu } = modelSelectElements();
+    if (!menu.hidden) return;
+    renderModelMenu(""); // 展开即全量，不按已有值过滤
+    menu.hidden = false;
+    toggle.setAttribute("aria-expanded", "true");
+    input.focus();
+  }
+
+  function filterModelMenuOnTyping() {
+    const { input, menu } = modelSelectElements();
+    if (menu.hidden) return;
+    renderModelMenu(input.value);
+    menu.hidden = false;
+  }
+
+  function bindModelSelectEvents() {
+    const { wrap, input, toggle, menu } = modelSelectElements();
+    toggle.addEventListener("click", () => {
+      if (menu.hidden) openModelMenu();
+      else closeModelMenu();
+    });
+    input.addEventListener("focus", () => openModelMenu());
+    input.addEventListener("input", () => filterModelMenuOnTyping());
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !menu.hidden) {
+        closeModelMenu();
+        return;
+      }
+      if (menu.hidden || (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Enter")) return;
+      const options = $$("#model-select-menu .model-select-option");
+      if (!options.length) return;
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (state.modelPresetIndex >= 0 && options[state.modelPresetIndex]) {
+          input.value = options[state.modelPresetIndex].textContent;
+          closeModelMenu();
+          input.focus();
+        }
+        return;
+      }
+      event.preventDefault();
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      state.modelPresetIndex = (state.modelPresetIndex + delta + options.length) % options.length;
+      options.forEach((item, index) => item.classList.toggle("active", index === state.modelPresetIndex));
+      options[state.modelPresetIndex].scrollIntoView({ block: "nearest" });
+    });
+    document.addEventListener("pointerdown", (event) => {
+      if (!wrap.contains(event.target)) closeModelMenu();
+    });
+  }
+
+  // Records the active provider's preset model ids for the custom dropdown;
+  // the input itself stays free-form so custom model ids keep working.
+  function renderModelPresets(meta) {
+    state.modelPresetList = meta?.modelPresets || [];
+    const { menu } = modelSelectElements();
+    if (!menu.hidden) renderModelMenu("");
   }
 
   function setProviderChoice(value, options = {}) {
@@ -327,6 +423,7 @@
     $("#connection-name-input").value = draft.name || "";
     $("#base-url-input").value = draft.baseUrl || "";
     $("#model-input").value = draft.model || "gpt-image-2.5-flare";
+    closeModelMenu(); // 程序回填/切换配置时收起预设菜单，避免残留上一份的列表
     $("#api-key-input").value = "";
     $("#request-timeout-input").value = draft.requestTimeoutSeconds || 180;
     $("#unlock-password-input").value = "";
@@ -3489,6 +3586,7 @@
 
   $("#add-connection-button").addEventListener("click", () => populateConnectionEditor(null));
   $("#official-template-button").addEventListener("click", () => populateConnectionEditor(null, { official: true }));
+  bindModelSelectEvents();
   ["#connection-name-input", "#base-url-input"].forEach((selector) => {
     $(selector).addEventListener("input", syncDraftProfileFromEditor);
   });
